@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Driver Dispatch Dashboard</title>
+    <style>
+      :root {
+        --bg: #07111f;
+        --panel: #0f172a;
+        --panel-2: #111c32;
+        --accent: #38bdf8;
+        --accent-2: #8b5cf6;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --success: #22c55e;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: linear-gradient(135deg, var(--bg), #172554);
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      .shell {
+        max-width: 1320px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+        padding: 16px 22px;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 16px;
+        backdrop-filter: blur(14px);
+      }
+
+      .brand {
+        font-size: 1.2rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+      }
+
+      .pill {
+        background: rgba(56, 189, 248, 0.14);
+        color: var(--accent);
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 0.9rem;
+      }
+
+      .hero {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 1.2fr 0.8fr;
+        margin-bottom: 24px;
+      }
+
+      .card {
+        background: rgba(15, 23, 42, 0.92);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 20px;
+        padding: 20px;
+        box-shadow: 0 20px 40px rgba(2, 6, 23, 0.25);
+      }
+
+      .hero h1 {
+        margin-top: 0;
+        font-size: 2rem;
+        margin-bottom: 8px;
+      }
+
+      .hero p { color: var(--muted); line-height: 1.6; }
+
+      .stats {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-bottom: 24px;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+      }
+
+      .stat {
+        background: linear-gradient(145deg, rgba(17, 28, 50, 0.95), rgba(9, 16, 34, 0.95));
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 18px;
+        padding: 16px;
+      }
+
+      .stat .label { color: var(--muted); font-size: 0.9rem; margin-bottom: 8px; }
+      .stat .value { font-size: 1.6rem; font-weight: 700; }
+
+      .grid {
+        display: grid;
+        gap: 20px;
+        grid-template-columns: 1.1fr 0.9fr;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+
+      th, td {
+        text-align: left;
+        padding: 12px 10px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+      }
+
+      th { color: var(--muted); font-weight: 600; font-size: 0.9rem; }
+      tbody tr:hover { background: rgba(56, 189, 248, 0.05); }
+
+      .status {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+
+      .status.available { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+      .status.on_trip { background: rgba(245, 158, 11, 0.15); color: #fcd34d; }
+      .status.inactive { background: rgba(239, 68, 68, 0.15); color: #fda4af; }
+      .status.assigned { background: rgba(56, 189, 248, 0.15); color: #7dd3fc; }
+      .status.started { background: rgba(168, 85, 247, 0.15); color: #d8b4fe; }
+      .status.completed { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+      .status.cancelled { background: rgba(239, 68, 68, 0.15); color: #fda4af; }
+
+      .form-row {
+        display: grid;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .inline-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      input, select, button {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: var(--panel-2);
+        color: var(--text);
+      }
+
+      button {
+        cursor: pointer;
+        font-weight: 600;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        border: none;
+      }
+
+      .secondary-btn {
+        background: rgba(148, 163, 184, 0.14);
+        color: var(--text);
+        border: 1px solid rgba(148, 163, 184, 0.24);
+      }
+
+      .muted { color: var(--muted); }
+      .error { color: #fda4af; margin-top: 8px; }
+      .success { color: #86efac; margin-top: 8px; }
+      .empty { color: var(--muted); padding: 14px 0; }
+
+      .driver-panel {
+        margin-top: 14px;
+        padding: 14px;
+        border-radius: 14px;
+        background: rgba(17, 28, 50, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+      }
+
+      .driver-panel h3 { margin-top: 0; margin-bottom: 10px; }
+      .driver-panel .detail-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .detail-item { color: var(--muted); font-size: 0.95rem; }
+      .detail-item strong { color: var(--text); }
+
+      @media (max-width: 900px) {
+        .hero, .grid, .stats { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="topbar">
+        <div class="brand">Driver Dispatch Dashboard</div>
+        <div class="pill" id="auth-pill">Not signed in</div>
+      </div>
+
+      <div class="hero">
+        <div class="card">
+          <h1>Run dispatch operations from one clean view</h1>
+          <p>
+            Manage drivers, track trips, and monitor dispatch flow with a modern dashboard.
+            Sign in to load live data from the backend API.
+          </p>
+        </div>
+        <div class="card">
+          <h2>Access the dashboard</h2>
+          <div class="form-row">
+            <input id="username" placeholder="Username" value="dispatcher" />
+            <input id="email" placeholder="Email" value="dispatcher@example.com" />
+            <input id="password" type="password" placeholder="Password" value="secret123" />
+            <button id="login-btn">Sign in or create account</button>
+          </div>
+          <div id="auth-message" class="muted"></div>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="label">Total Drivers</div><div class="value" id="total-drivers">--</div></div>
+        <div class="stat"><div class="label">Available Drivers</div><div class="value" id="available-drivers">--</div></div>
+        <div class="stat"><div class="label">Active Trips</div><div class="value" id="active-trips">--</div></div>
+        <div class="stat"><div class="label">Completed Trips</div><div class="value" id="completed-trips">--</div></div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="toolbar">
+            <h2 style="margin: 0;">Drivers</h2>
+            <button id="refresh-drivers" class="secondary-btn">Refresh</button>
+          </div>
+          <div id="drivers-loading" class="empty">Sign in to load driver data.</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="drivers-body"></tbody>
+          </table>
+
+          <div id="driver-panel" class="driver-panel" style="display: none;">
+            <h3 id="driver-panel-title">Driver details</h3>
+            <div class="detail-grid">
+              <div class="detail-item"><strong>Name:</strong> <span id="detail-name">--</span></div>
+              <div class="detail-item"><strong>Phone:</strong> <span id="detail-phone">--</span></div>
+              <div class="detail-item"><strong>Status:</strong> <span id="detail-status">--</span></div>
+              <div class="detail-item"><strong>License:</strong> <span id="detail-license">--</span></div>
+            </div>
+            <div class="detail-item" style="margin-top:10px;"><strong>Summary:</strong> <span id="detail-summary">--</span></div>
+            <div class="detail-item" style="margin-top:8px;"><strong>Recent trips:</strong></div>
+            <ul id="detail-trips" style="margin: 8px 0 0 18px; color: var(--muted);"></ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="toolbar">
+            <h2 style="margin: 0;">Quick Actions</h2>
+            <button id="refresh-trips" class="secondary-btn">Refresh</button>
+          </div>
+          <div class="form-row">
+            <input id="driver-name" placeholder="Driver name" />
+            <input id="driver-phone" placeholder="Phone number" />
+            <input id="driver-license" placeholder="License number" />
+            <input id="driver-expiry" type="date" />
+            <button id="create-driver-btn">Create driver</button>
+          </div>
+
+          <div class="form-row" style="margin-top: 18px;">
+            <input id="trip-source" placeholder="Source" />
+            <input id="trip-destination" placeholder="Destination" />
+            <input id="trip-distance" type="number" step="0.1" placeholder="Distance km" />
+            <input id="trip-duration" type="number" placeholder="Duration min" />
+            <button id="create-trip-btn">Create trip</button>
+          </div>
+
+          <div class="form-row" style="margin-top: 18px;">
+            <div class="inline-row">
+              <select id="trip-select"></select>
+              <select id="driver-select"></select>
+            </div>
+            <button id="assign-trip-btn">Assign selected trip</button>
+            <div class="inline-row">
+              <button id="start-trip-btn" class="secondary-btn">Start selected trip</button>
+              <button id="complete-trip-btn" class="secondary-btn">Complete selected trip</button>
+            </div>
+          </div>
+          <div id="action-message" class="muted"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 20px;">
+        <div class="toolbar">
+          <h2 style="margin: 0;">Recent Trips</h2>
+        </div>
+        <div id="trips-loading" class="empty">Sign in to load recent trips.</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Route</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="trips-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+      const state = { token: null };
+      const authPill = document.getElementById('auth-pill');
+      const authMessage = document.getElementById('auth-message');
+      const actionMessage = document.getElementById('action-message');
+      const loginButton = document.getElementById('login-btn');
+      const createDriverButton = document.getElementById('create-driver-btn');
+      const createTripButton = document.getElementById('create-trip-btn');
+      const assignTripButton = document.getElementById('assign-trip-btn');
+      const startTripButton = document.getElementById('start-trip-btn');
+      const completeTripButton = document.getElementById('complete-trip-btn');
+      const refreshDriversButton = document.getElementById('refresh-drivers');
+      const refreshTripsButton = document.getElementById('refresh-trips');
+      const tripSelect = document.getElementById('trip-select');
+      const driverSelect = document.getElementById('driver-select');
+      const driverPanel = document.getElementById('driver-panel');
+
+      function setMessage(text, type = 'muted', target = authMessage) {
+        target.className = type;
+        target.textContent = text;
+      }
+
+      async function createOrLogin() {
+        const username = document.getElementById('username').value.trim();
+        const email = document.getElementById('email').value.trim();
+        const password = document.getElementById('password').value;
+
+        if (!username || !password) {
+          setMessage('Please enter a username and password.', 'error');
+          return;
+        }
+
+        try {
+          const createRes = await fetch('/users/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email: email || `${username}@example.com`, password })
+          });
+
+          if (createRes.status === 400) {
+            setMessage('Trying to sign in with existing account...', 'muted');
+          } else if (!createRes.ok) {
+            throw new Error('Unable to create account');
+          }
+
+          const tokenRes = await fetch('/auth/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ username, password })
+          });
+
+          const tokenData = await tokenRes.json();
+          if (!tokenRes.ok) {
+            throw new Error(tokenData.detail || 'Login failed');
+          }
+
+          state.token = tokenData.access_token;
+          authPill.textContent = `Signed in as ${username}`;
+          setMessage('Connected successfully. Loading dashboard data...', 'success');
+          await loadDashboard();
+        } catch (error) {
+          authPill.textContent = 'Not signed in';
+          setMessage(error.message || 'Unable to connect to the API.', 'error');
+        }
+      }
+
+      async function loadDashboard() {
+        if (!state.token) return;
+
+        const headers = { Authorization: `Bearer ${state.token}` };
+        document.getElementById('drivers-loading').textContent = 'Loading drivers...';
+        document.getElementById('trips-loading').textContent = 'Loading trips...';
+
+        try {
+          const summaryRes = await fetch('/drivers/dashboard/summary', { headers });
+          const summary = summaryRes.ok ? await summaryRes.json() : null;
+          if (summary) {
+            document.getElementById('total-drivers').textContent = summary.total_drivers ?? '--';
+            document.getElementById('available-drivers').textContent = summary.available_drivers ?? '--';
+            document.getElementById('active-trips').textContent = summary.active_trips ?? '--';
+            document.getElementById('completed-trips').textContent = summary.completed_trips ?? '--';
+          }
+
+          const driversRes = await fetch('/drivers/?limit=10', { headers });
+          const drivers = driversRes.ok ? await driversRes.json() : [];
+          const driversBody = document.getElementById('drivers-body');
+          driversBody.innerHTML = '';
+          if (!drivers.length) {
+            driversBody.innerHTML = '<tr><td colspan="3" class="empty">No drivers found.</td></tr>';
+          } else {
+            drivers.forEach(driver => {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `
+                <td>${driver.name}</td>
+                <td>${driver.phone}</td>
+                <td><span class="status ${driver.status}">${driver.status}</span></td>
+              `;
+              tr.style.cursor = 'pointer';
+              tr.addEventListener('click', () => showDriverDetails(driver.id, headers));
+              driversBody.appendChild(tr);
+            });
+          }
+          document.getElementById('drivers-loading').textContent = '';
+
+          const tripsRes = await fetch('/trips/?limit=8', { headers });
+          const trips = tripsRes.ok ? await tripsRes.json() : [];
+          const tripsBody = document.getElementById('trips-body');
+          tripsBody.innerHTML = '';
+          tripSelect.innerHTML = '<option value="">Select a trip</option>';
+          if (!trips.length) {
+            tripsBody.innerHTML = '<tr><td colspan="2" class="empty">No trips found.</td></tr>';
+          } else {
+            trips.forEach(trip => {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `
+                <td>${trip.source} → ${trip.destination}</td>
+                <td><span class="status ${trip.status}">${trip.status}</span></td>
+              `;
+              tripsBody.appendChild(tr);
+
+              const option = document.createElement('option');
+              option.value = trip.id;
+              option.textContent = `${trip.source} → ${trip.destination} (${trip.status})`;
+              tripSelect.appendChild(option);
+            });
+          }
+          document.getElementById('trips-loading').textContent = '';
+
+          const availableDrivers = drivers.filter(driver => driver.status === 'available');
+          driverSelect.innerHTML = '<option value="">Select a driver</option>';
+          availableDrivers.forEach(driver => {
+            const option = document.createElement('option');
+            option.value = driver.id;
+            option.textContent = `${driver.name} (${driver.phone})`;
+            driverSelect.appendChild(option);
+          });
+        } catch (error) {
+          setMessage(error.message || 'Unable to load data.', 'error');
+        }
+      }
+
+      async function showDriverDetails(driverId, headers) {
+        try {
+          const driverRes = await fetch(`/drivers/${driverId}`, { headers });
+          const driver = driverRes.ok ? await driverRes.json() : null;
+          const summaryRes = await fetch(`/drivers/${driverId}/summary`, { headers });
+          const summary = summaryRes.ok ? await summaryRes.json() : null;
+          const tripsRes = await fetch(`/drivers/${driverId}/trips?limit=5`, { headers });
+          const trips = tripsRes.ok ? await tripsRes.json() : [];
+
+          if (!driver) {
+            driverPanel.style.display = 'none';
+            return;
+          }
+
+          document.getElementById('driver-panel-title').textContent = driver.name;
+          document.getElementById('detail-name').textContent = driver.name;
+          document.getElementById('detail-phone').textContent = driver.phone;
+          document.getElementById('detail-status').textContent = driver.status;
+          document.getElementById('detail-license').textContent = driver.license_number || '—';
+          const summaryText = summary
+            ? `Total ${summary.total_trips} trips • Completed ${summary.completed_trips} • Assigned ${summary.assigned_trips}`
+            : 'No summary available';
+          document.getElementById('detail-summary').textContent = summaryText;
+
+          const tripList = document.getElementById('detail-trips');
+          tripList.innerHTML = '';
+          if (!trips.length) {
+            tripList.innerHTML = '<li>No recent trips.</li>';
+          } else {
+            trips.forEach(trip => {
+              const item = document.createElement('li');
+              item.textContent = `${trip.source} → ${trip.destination} (${trip.status})`;
+              tripList.appendChild(item);
+            });
+          }
+
+          driverPanel.style.display = 'block';
+        } catch (error) {
+          setMessage(error.message || 'Unable to load driver details.', 'error', actionMessage);
+        }
+      }
+
+      async function createDriver() {
+        if (!state.token) {
+          setMessage('Sign in first to create a driver.', 'error', actionMessage);
+          return;
+        }
+
+        const payload = {
+          name: document.getElementById('driver-name').value.trim(),
+          phone: document.getElementById('driver-phone').value.trim(),
+          license_number: document.getElementById('driver-license').value.trim(),
+          license_expiry: document.getElementById('driver-expiry').value
+        };
+
+        try {
+          const res = await fetch('/drivers/', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${state.token}`
+            },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Driver creation failed');
+          setMessage(`Driver created: ${data.name}`, 'success', actionMessage);
+          document.getElementById('driver-name').value = '';
+          document.getElementById('driver-phone').value = '';
+          document.getElementById('driver-license').value = '';
+          document.getElementById('driver-expiry').value = '';
+          await loadDashboard();
+        } catch (error) {
+          setMessage(error.message || 'Unable to create driver.', 'error', actionMessage);
+        }
+      }
+
+      async function createTrip() {
+        if (!state.token) {
+          setMessage('Sign in first to create a trip.', 'error', actionMessage);
+          return;
+        }
+
+        const payload = {
+          source: document.getElementById('trip-source').value.trim(),
+          destination: document.getElementById('trip-destination').value.trim(),
+          distance_km: document.getElementById('trip-distance').value ? parseFloat(document.getElementById('trip-distance').value) : null,
+          duration_minutes: document.getElementById('trip-duration').value ? parseInt(document.getElementById('trip-duration').value, 10) : null
+        };
+
+        try {
+          const res = await fetch('/trips/', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${state.token}`
+            },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Trip creation failed');
+          setMessage(`Trip created: ${data.source} → ${data.destination}`, 'success', actionMessage);
+          document.getElementById('trip-source').value = '';
+          document.getElementById('trip-destination').value = '';
+          document.getElementById('trip-distance').value = '';
+          document.getElementById('trip-duration').value = '';
+          await loadDashboard();
+        } catch (error) {
+          setMessage(error.message || 'Unable to create trip.', 'error', actionMessage);
+        }
+      }
+
+      async function assignTrip() {
+        if (!state.token) {
+          setMessage('Sign in first to assign a trip.', 'error', actionMessage);
+          return;
+        }
+
+        const tripId = tripSelect.value;
+        const driverId = driverSelect.value;
+        if (!tripId || !driverId) {
+          setMessage('Please choose both a trip and a driver.', 'error', actionMessage);
+          return;
+        }
+
+        try {
+          const res = await fetch(`/trips/${tripId}/assign`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${state.token}`
+            },
+            body: JSON.stringify({ driver_id: parseInt(driverId, 10) })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Trip assignment failed');
+          setMessage(data.message || `Trip assigned successfully to driver ${driverId}.`, 'success', actionMessage);
+          await loadDashboard();
+        } catch (error) {
+          setMessage(error.message || 'Unable to assign trip.', 'error', actionMessage);
+        }
+      }
+
+      async function updateTripLifecycle(action) {
+        if (!state.token) {
+          setMessage('Sign in first to update a trip.', 'error', actionMessage);
+          return;
+        }
+
+        const tripId = tripSelect.value;
+        if (!tripId) {
+          setMessage('Please choose a trip first.', 'error', actionMessage);
+          return;
+        }
+
+        try {
+          const res = await fetch(`/trips/${tripId}/${action}`, {
+            method: 'PATCH',
+            headers: {
+              Authorization: `Bearer ${state.token}`
+            }
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || `Unable to ${action} trip`);
+          setMessage(data.message || `Trip ${action}d successfully.`, 'success', actionMessage);
+          await loadDashboard();
+        } catch (error) {
+          setMessage(error.message || `Unable to ${action} trip.`, 'error', actionMessage);
+        }
+      }
+
+      loginButton.addEventListener('click', createOrLogin);
+      createDriverButton.addEventListener('click', createDriver);
+      createTripButton.addEventListener('click', createTrip);
+      assignTripButton.addEventListener('click', assignTrip);
+      startTripButton.addEventListener('click', () => updateTripLifecycle('start'));
+      completeTripButton.addEventListener('click', () => updateTripLifecycle('complete'));
+      refreshDriversButton.addEventListener('click', loadDashboard);
+      refreshTripsButton.addEventListener('click', loadDashboard);
+    </script>
+  </body>
+</html>

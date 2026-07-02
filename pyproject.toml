@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 88
+target-version = ["py314"]
+include = '\.pyi?$'
+exclude = '''
+/(
+  \.git
+ | \.venv
+ | venv
+ | build
+ | dist
+ | __pycache__
+ | alembic
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["app"]
+include_trailing_comma = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [".git", "__pycache__", "venv", ".venv", "build", "dist", "alembic"]
+select = ["C", "E", "F", "W", "B", "B950"]
+application-import-names = ["app"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+ignore_missing_imports = true
+exclude = '(^(\.venv/|venv/|build/|dist/|alembic/))'

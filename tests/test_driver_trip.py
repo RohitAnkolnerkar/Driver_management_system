@@ -1,0 +1,1159 @@
+import pytest
+from datetime import date
+from app.core.security import hash_password
+from app.models.user import User
+
+
+def get_token(client, username="dispatcher", password="secret123"):
+    login_data = {"username": username, "password": password}
+    response = client.post("/auth/token", data=login_data)
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+def create_user(client, username="dispatcher", email="dispatcher@example.com", password="secret123"):
+    response = client.post("/users/", json={"username": username, "email": email, "password": password})
+    assert response.status_code == 200
+    return response.json()
+
+
+def create_driver(client, token, name="Rohit", phone="1234567890", license_number="ABC123", license_expiry="2026-12-31T00:00:00"):
+    response = client.post(
+        "/drivers/",
+        json={"name": name, "phone": phone, "license_number": license_number, "license_expiry": license_expiry},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def create_user_with_role(db_session, username="viewer", email="viewer@example.com", password="secret123", role="viewer"):
+    user = User(
+        username=username,
+        email=email,
+        hashed_password=hash_password(password),
+        role=role,
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+def test_driver_and_trip_lifecycle(client):
+    create_user(client)
+    token = get_token(client)
+
+    driver = create_driver(client, token)
+    assert driver["status"] == "available"
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+    assert trip["source"] == "A"
+    assert trip["destination"] == "B"
+    assert trip["status"] == "created"
+
+    response = client.patch(
+        f"/trips/{trip['id']}/assign",
+        json={"driver_id": driver["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Driver assigned successfully"
+
+    response = client.patch(
+        f"/trips/{trip['id']}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Trip started"
+
+    response = client.patch(
+        f"/trips/{trip['id']}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Trip completed"
+
+
+def test_protected_endpoints_require_token(client):
+    response = client.post("/drivers/", json={"name": "Test", "phone": "1112223333", "license_number": "ABC", "license_expiry": "2026-12-31T00:00:00"})
+    assert response.status_code == 401
+
+    response = client.post("/trips/", json={"source": "A", "destination": "B"})
+    assert response.status_code == 401
+
+    response = client.patch("/trips/1/start")
+    assert response.status_code == 401
+
+
+def test_create_driver_duplicate_phone(client):
+    create_user(client)
+    token = get_token(client)
+    create_driver(client, token, phone="5555555555")
+
+    response = client.post(
+        "/drivers/",
+        json={"name": "Duplicate", "phone": "5555555555", "license_number": "ABC123", "license_expiry": "2026-12-31T00:00:00"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Driver with this phone already exists"
+
+
+def test_create_driver_invalid_license_expiry(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/drivers/",
+        json={"name": "InvalidDate", "phone": "9998887777", "license_number": "ABC123", "license_expiry": "not-a-date"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+    assert any(error["loc"][-1] == "license_expiry" for error in response.json()["detail"])
+
+
+def test_create_trip_invalid_data(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+    assert any(error["loc"][-1] == "destination" for error in response.json()["detail"])
+
+
+def test_create_trip_with_company_fields(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={
+            "source": "A",
+            "destination": "B",
+            "source_company": "Acme Logistics",
+            "destination_company": "Beta Warehousing",
+            "duration_minutes": 30,
+            "distance_km": 10.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+    assert trip["source_company"] == "Acme Logistics"
+    assert trip["destination_company"] == "Beta Warehousing"
+    assert trip["cost_per_trip"] == 3.0 + 10.0 * 1.5 + 30 * 0.25
+    assert trip["time_taken_minutes"] == 30
+
+
+def test_list_trips_by_source_company_and_date(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={
+            "source": "A",
+            "destination": "B",
+            "source_company": "Acme Logistics",
+            "destination_company": "Beta Warehousing",
+            "scheduled_date": "2026-07-06T10:00:00",
+            "duration_minutes": 45,
+            "distance_km": 20.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+
+    response = client.get(
+        "/trips/?source_company=Acme Logistics&scheduled_on=2026-07-06",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trips = response.json()
+    assert len(trips) == 1
+    assert trips[0]["id"] == trip["id"]
+    assert trips[0]["source_company"] == "Acme Logistics"
+    assert trips[0]["cost_per_trip"] == 3.0 + 20.0 * 1.5 + 45 * 0.25
+    assert trips[0]["time_taken_minutes"] == 45
+
+
+def test_update_trip_company_fields(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip_id = response.json()["id"]
+
+    update_response = client.patch(
+        f"/trips/{trip_id}",
+        json={
+            "source_company": "Acme Logistics",
+            "destination_company": "Beta Warehousing",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["source_company"] == "Acme Logistics"
+    assert updated["destination_company"] == "Beta Warehousing"
+
+
+def test_assign_invalid_driver_id(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip_id = response.json()["id"]
+
+    response = client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": 9999},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Driver not found"
+
+
+def test_start_trip_before_assign(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    trip_id = response.json()["id"]
+
+    response = client.patch(
+        f"/trips/{trip_id}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Trip must be assigned first"
+
+
+def test_complete_trip_before_start(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    trip_id = response.json()["id"]
+
+    response = client.patch(
+        f"/trips/{trip_id}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Trip not started"
+
+
+def test_get_drivers_pagination_and_filtering(client):
+    create_user(client)
+    token = get_token(client)
+
+    create_driver(client, token, name="Alpha", phone="1111111111")
+    create_driver(client, token, name="Bravo", phone="2222222222")
+    create_driver(client, token, name="Charlie", phone="3333333333")
+
+    response = client.get("/drivers/?limit=2&offset=0", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+
+    response = client.get("/drivers/?q=Bravo", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == "Bravo"
+
+    response = client.get("/drivers/?status=available", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert all(driver["status"] == "available" for driver in response.json())
+
+
+def test_driver_creation_denied_for_non_dispatcher_role(client, db_session):
+    create_user_with_role(db_session, username="viewer", email="viewer@example.com", password="secret123", role="viewer")
+    token = get_token(client, username="viewer", password="secret123")
+
+    response = client.post(
+        "/drivers/",
+        json={"name": "Test", "phone": "4445556666", "license_number": "ABC", "license_expiry": "2026-12-31T00:00:00"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Insufficient permissions"
+
+
+def test_get_driver_by_id(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Detail Driver", phone="7778889999")
+
+    response = client.get(f"/drivers/{driver['id']}", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "Detail Driver"
+    assert response.json()["phone"] == "7778889999"
+
+
+def test_get_driver_summary(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Summary Driver", phone="5556667777")
+
+    trip1 = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip1['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip1['id']}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip1['id']}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    trip2 = client.post(
+        "/trips/",
+        json={"source": "C", "destination": "D"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip2['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip2['id']}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.get(f"/drivers/{driver['id']}/summary", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["total_trips"] == 2
+    assert summary["completed_trips"] == 1
+    assert summary["cancelled_trips"] == 1
+    assert summary["started_trips"] == 0
+    assert summary["assigned_trips"] == 0
+
+
+def test_update_driver_profile(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Profile Driver", phone="8887776666")
+
+    response = client.patch(
+        f"/drivers/{driver['id']}",
+        json={"name": "Updated Driver", "phone": "9998887777", "status": "inactive"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["name"] == "Updated Driver"
+    assert updated["phone"] == "9998887777"
+    assert updated["status"] == "inactive"
+
+
+def test_list_trips_filtering_by_status_and_driver(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Filter Driver", phone="1010101010")
+
+    trip_response = client.post(
+        "/trips/",
+        json={"source": "Mumbai", "destination": "Delhi"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert trip_response.status_code == 200
+    trip_id = trip_response.json()["id"]
+
+    client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.get(f"/trips/?status=assigned&driver_id={driver['id']}", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    trips = response.json()
+    assert len(trips) == 1
+    assert trips[0]["driver_id"] == driver["id"]
+    assert trips[0]["status"] == "assigned"
+
+    response = client.get(f"/trips/{trip_id}", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json()["source"] == "Mumbai"
+    assert response.json()["destination"] == "Delhi"
+
+
+def test_update_driver_license_fields(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="License Driver", phone="6665554444")
+
+    response = client.patch(
+        f"/drivers/{driver['id']}",
+        json={"license_number": "NEWLIC123", "license_expiry": "2027-10-01T00:00:00"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    updated = response.json()
+    assert updated["license_number"] == "NEWLIC123"
+    assert updated["license_expiry"].startswith("2027-10-01")
+
+
+def test_update_driver_duplicate_phone_returns_400(client):
+    create_user(client)
+    token = get_token(client)
+    create_driver(client, token, name="First", phone="1111111111")
+    second_driver = create_driver(client, token, name="Second", phone="2222222222")
+
+    response = client.patch(
+        f"/drivers/{second_driver['id']}",
+        json={"phone": "1111111111"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Driver with this phone already exists"
+
+
+def test_get_driver_not_found_returns_404(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.get("/drivers/9999", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Driver not found"
+
+
+def test_get_driver_trip_history(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="History Driver", phone="3243254321")
+
+    trip_a = client.post(
+        "/trips/",
+        json={"source": "Home", "destination": "Cafe"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    response = client.patch(
+        f"/trips/{trip_a['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    start_response = client.patch(
+        f"/trips/{trip_a['id']}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert start_response.status_code == 200
+
+    complete_response = client.patch(
+        f"/trips/{trip_a['id']}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert complete_response.status_code == 200
+
+    trip_b = client.post(
+        "/trips/",
+        json={"source": "Cafe", "destination": "Office"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    response = client.patch(
+        f"/trips/{trip_b['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    response = client.get(f"/drivers/{driver['id']}/trips", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    trips = response.json()
+    assert len(trips) == 2
+    assert {trip['id'] for trip in trips} == {trip_a['id'], trip_b['id']}
+
+
+def test_create_and_discard_regular_trip(client):
+    create_user(client)
+    token = get_token(client)
+
+    scheduled_date = "2026-12-31T10:00:00"
+    response = client.post(
+        "/trips/",
+        json={
+            "source": "Station",
+            "destination": "Airport",
+            "is_regular": True,
+            "scheduled_date": scheduled_date,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+    assert trip["is_regular"] is True
+    assert trip["scheduled_date"].startswith("2026-12-31")
+    assert trip["status"] == "created"
+
+    discard_response = client.patch(
+        f"/trips/{trip['id']}/discard",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert discard_response.status_code == 200
+    assert discard_response.json()["message"] == "Trip discarded"
+
+    trip_response = client.get(f"/trips/{trip['id']}", headers={"Authorization": f"Bearer {token}"})
+    assert trip_response.status_code == 200
+    assert trip_response.json()["status"] == "cancelled"
+    assert trip_response.json()["cancel_reason"] == "discarded"
+
+
+def test_get_dashboard_summary(client):
+    create_user(client)
+    token = get_token(client)
+
+    driver_a = create_driver(client, token, name="Dashboard Driver A", phone="1112223334")
+    driver_b = create_driver(client, token, name="Dashboard Driver B", phone="1112223335")
+
+    trip = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip['id']}/assign",
+        json={"driver_id": driver_a["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.get("/drivers/dashboard/summary", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["total_drivers"] == 2
+    assert summary["available_drivers"] == 1
+    assert summary["on_trip_drivers"] == 1
+    assert summary["inactive_drivers"] == 0
+    assert summary["active_trips"] == 1
+    assert summary["completed_trips"] == 0
+    assert summary["cancelled_trips"] == 0
+
+
+def test_get_trip_stats(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Stats Driver", phone="5554443333")
+
+    trip1 = client.post(
+        "/trips/",
+        json={"source": "X", "destination": "Y", "distance_km": 10, "duration_minutes": 20},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip1['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip1['id']}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip1['id']}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    trip2 = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip2['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip2['id']}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.get("/trips/stats", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    stats = response.json()
+
+    assert stats["total_trips"] == 2
+    assert stats["completed_trips"] == 1
+    assert stats["cancelled_trips"] == 1
+    assert stats["created_trips"] == 0
+    assert stats["assigned_trips"] == 0
+    assert stats["started_trips"] == 0
+    assert stats["total_estimated_fare"] == 23.0 + 3.0
+    assert stats["average_estimated_fare"] == round((23.0 + 3.0) / 2, 2)
+
+
+def test_trip_response_includes_driver_info(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Driver Info", phone="7778889990")
+
+    trip = client.post(
+        "/trips/",
+        json={"source": "Station", "destination": "Mall"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    assign_response = client.patch(
+        f"/trips/{trip['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert assign_response.status_code == 200
+
+    response = client.get(f"/trips/{trip['id']}", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    trip_json = response.json()
+    assert trip_json["driver_id"] == driver["id"]
+    assert trip_json["driver_name"] == driver["name"]
+    assert trip_json["driver_phone"] == driver["phone"]
+
+
+def test_get_trips_requires_auth(client):
+    response = client.get("/trips/")
+    assert response.status_code == 401
+
+
+def test_get_trips_created_date_filters(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="DateFilter Driver", phone="1010101012")
+
+    older_trip = client.post(
+        "/trips/",
+        json={"source": "Old", "destination": "Nowhere"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    newer_trip = client.post(
+        "/trips/",
+        json={"source": "New", "destination": "Somewhere"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    response = client.get(
+        f"/trips/?created_after=2000-01-01T00:00:00&created_before=2100-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert len(response.json()) >= 2
+
+    response = client.get(
+        f"/trips/?created_before=2000-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_regular_trip_recurs_on_non_sunday(client):
+    create_user(client)
+    token = get_token(client)
+
+    scheduled_date = "2026-07-06T10:00:00"
+    response = client.post(
+        "/trips/",
+        json={
+            "source": "Station",
+            "destination": "Airport",
+            "is_regular": True,
+            "scheduled_date": scheduled_date,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+    assert trip["is_regular"] is True
+    assert trip["scheduled_date"].startswith("2026-07-06")
+
+    response = client.get(
+        "/trips/?scheduled_on=2026-07-07",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trips = response.json()
+    assert any(t["id"] == trip["id"] for t in trips)
+
+
+def test_regular_trip_does_not_show_on_sunday(client):
+    create_user(client)
+    token = get_token(client)
+
+    scheduled_date = "2026-07-06T10:00:00"
+    response = client.post(
+        "/trips/",
+        json={
+            "source": "Station",
+            "destination": "Airport",
+            "is_regular": True,
+            "scheduled_date": scheduled_date,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+
+    response = client.get(
+        "/trips/?scheduled_on=2026-07-05",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trips = response.json()
+    assert all(t["id"] != trip["id"] for t in trips)
+
+
+def test_estimate_trip_fare(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/estimate-fare",
+        json={"distance_km": 10.0, "duration_minutes": 15},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["base_fare"] == 3.0
+    assert data["distance_km"] == 10.0
+    assert data["duration_minutes"] == 15
+    assert data["estimated_fare"] == 3.0 + 10.0 * 1.5 + 15 * 0.25
+
+
+def test_estimate_trip_fare_validation(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/estimate-fare",
+        json={"distance_km": -1.0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
+
+
+def test_create_trip_with_distance_and_duration(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B", "distance_km": 8.0, "duration_minutes": 20},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip = response.json()
+    assert trip["distance_km"] == 8.0
+    assert trip["duration_minutes"] == 20
+    assert trip["estimated_fare"] == 3.0 + 8.0 * 1.5 + 20 * 0.25
+
+
+def test_update_trip_before_assignment(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "Old", "destination": "OldTown"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    trip_id = response.json()["id"]
+
+    update_response = client.patch(
+        f"/trips/{trip_id}",
+        json={"source": "New", "destination": "NewTown", "distance_km": 5.5, "duration_minutes": 12},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["source"] == "New"
+    assert updated["destination"] == "NewTown"
+    assert updated["distance_km"] == 5.5
+    assert updated["duration_minutes"] == 12
+    assert updated["estimated_fare"] == 3.0 + 5.5 * 1.5 + 12 * 0.25
+
+
+def test_get_driver_earnings(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Earnings Driver", phone="1231231234")
+
+    trip1 = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B", "distance_km": 10.0, "duration_minutes": 20},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip1['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(f"/trips/{trip1['id']}/start", headers={"Authorization": f"Bearer {token}"})
+    client.patch(f"/trips/{trip1['id']}/complete", headers={"Authorization": f"Bearer {token}"})
+
+    trip2 = client.post(
+        "/trips/",
+        json={"source": "C", "destination": "D", "distance_km": 5.0, "duration_minutes": 10},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip2['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(f"/trips/{trip2['id']}/start", headers={"Authorization": f"Bearer {token}"})
+    client.patch(f"/trips/{trip2['id']}/complete", headers={"Authorization": f"Bearer {token}"})
+
+    earnings_response = client.get(f"/drivers/{driver['id']}/earnings", headers={"Authorization": f"Bearer {token}"})
+    assert earnings_response.status_code == 200
+    earnings = earnings_response.json()
+    expected_total = round(3.0 + 10.0 * 1.5 + 20 * 0.25 + 3.0 + 5.0 * 1.5 + 10 * 0.25, 2)
+    assert earnings["completed_trips"] == 2
+    assert earnings["total_earnings"] == expected_total
+    assert earnings["average_fare"] == round(expected_total / 2, 2)
+
+
+def test_get_driver_earnings_date_filters(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Date Earnings", phone="1239876543")
+
+    trip1 = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B", "distance_km": 10.0, "duration_minutes": 20},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip1['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(f"/trips/{trip1['id']}/start", headers={"Authorization": f"Bearer {token}"})
+    client.patch(f"/trips/{trip1['id']}/complete", headers={"Authorization": f"Bearer {token}"})
+
+    trip2 = client.post(
+        "/trips/",
+        json={"source": "C", "destination": "D", "distance_km": 5.0, "duration_minutes": 10},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{trip2['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(f"/trips/{trip2['id']}/start", headers={"Authorization": f"Bearer {token}"})
+    client.patch(f"/trips/{trip2['id']}/complete", headers={"Authorization": f"Bearer {token}"})
+
+    response = client.get(
+        f"/drivers/{driver['id']}/earnings?completed_after=2000-01-01T00:00:00&completed_before=2100-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    earnings = response.json()
+    assert earnings["completed_trips"] == 2
+
+    response = client.get(
+        f"/drivers/{driver['id']}/earnings?completed_before=2000-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    earnings = response.json()
+    assert earnings["completed_trips"] == 0
+
+
+def test_driver_leaderboard_orders_by_earnings(client):
+    create_user(client)
+    token = get_token(client)
+    top_driver = create_driver(client, token, name="Top Driver", phone="1112223333")
+    second_driver = create_driver(client, token, name="Second Driver", phone="4445556666")
+
+    top_trip = client.post(
+        "/trips/",
+        json={"source": "Top", "destination": "Earn", "distance_km": 10, "duration_minutes": 20},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{top_trip['id']}/assign",
+        json={"driver_id": top_driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(f"/trips/{top_trip['id']}/start", headers={"Authorization": f"Bearer {token}"})
+    client.patch(f"/trips/{top_trip['id']}/complete", headers={"Authorization": f"Bearer {token}"})
+
+    second_trip = client.post(
+        "/trips/",
+        json={"source": "Second", "destination": "Earn", "distance_km": 5, "duration_minutes": 10},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{second_trip['id']}/assign",
+        json={"driver_id": second_driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(f"/trips/{second_trip['id']}/start", headers={"Authorization": f"Bearer {token}"})
+    client.patch(f"/trips/{second_trip['id']}/complete", headers={"Authorization": f"Bearer {token}"})
+
+    response = client.get("/drivers/leaderboard", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    leaderboard = response.json()
+
+    assert leaderboard[0]["driver_id"] == top_driver["id"]
+    assert leaderboard[0]["total_earnings"] > leaderboard[1]["total_earnings"]
+    assert leaderboard[0]["average_fare"] == round((3.0 + 10 * 1.5 + 20 * 0.25), 2)
+    assert leaderboard[1]["driver_id"] == second_driver["id"]
+
+
+def test_update_and_get_trip_summary(client):
+    create_user(client)
+    token = get_token(client)
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip_id = response.json()["id"]
+
+    summary_response = client.patch(
+        f"/trips/{trip_id}/summary",
+        json={"distance_km": 12.5, "duration_minutes": 30},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["trip_id"] == trip_id
+    assert summary["distance_km"] == 12.5
+    assert summary["duration_minutes"] == 30
+    assert summary["estimated_fare"] == 3.0 + 12.5 * 1.5 + 30 * 0.25
+
+    get_summary = client.get(f"/trips/{trip_id}/summary", headers={"Authorization": f"Bearer {token}"})
+    assert get_summary.status_code == 200
+    returned = get_summary.json()
+    assert returned == summary
+
+
+def test_get_trip_not_found_returns_404(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.get("/trips/9999", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Trip not found"
+
+
+def test_cancel_assigned_trip(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Cancel Driver", phone="9990001111")
+
+    trip_response = client.post(
+        "/trips/",
+        json={"source": "X", "destination": "Y"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert trip_response.status_code == 200
+    trip_id = trip_response.json()["id"]
+
+    response = client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    response = client.patch(
+        f"/trips/{trip_id}/cancel",
+        json={"reason": "Customer no-show"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Trip cancelled"
+
+    trip = client.get(f"/trips/{trip_id}", headers={"Authorization": f"Bearer {token}"})
+    assert trip.status_code == 200
+    trip_data = trip.json()
+    assert trip_data["status"] == "cancelled"
+    assert trip_data["cancel_reason"] == "Customer no-show"
+
+    driver_after = client.get(f"/drivers/{driver['id']}", headers={"Authorization": f"Bearer {token}"})
+    assert driver_after.status_code == 200
+    assert driver_after.json()["status"] == "available"
+
+
+def test_cancel_started_trip_is_not_allowed(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Started Driver", phone="2223334444")
+
+    trip_response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    trip_id = trip_response.json()["id"]
+
+    client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip_id}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.patch(
+        f"/trips/{trip_id}/cancel",
+        json={"reason": "Late start"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Trip cannot be cancelled"
+
+
+def test_reassign_trip_to_new_driver(client):
+    create_user(client)
+    token = get_token(client)
+    driver_one = create_driver(client, token, name="Driver One", phone="3334445555")
+    driver_two = create_driver(client, token, name="Driver Two", phone="4445556666")
+
+    trip_response = client.post(
+        "/trips/",
+        json={"source": "X", "destination": "Y"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    trip_id = trip_response.json()["id"]
+
+    assign_response = client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver_one["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert assign_response.status_code == 200
+
+    reassign_response = client.patch(
+        f"/trips/{trip_id}/reassign",
+        json={"driver_id": driver_two["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert reassign_response.status_code == 200
+    assert reassign_response.json()["message"] == "Driver reassigned successfully"
+
+    trip = client.get(f"/trips/{trip_id}", headers={"Authorization": f"Bearer {token}"}).json()
+    assert trip["driver_id"] == driver_two["id"]
+
+    driver_one_status = client.get(f"/drivers/{driver_one['id']}", headers={"Authorization": f"Bearer {token}"}).json()
+    assert driver_one_status["status"] == "available"
+    driver_two_status = client.get(f"/drivers/{driver_two['id']}", headers={"Authorization": f"Bearer {token}"}).json()
+    assert driver_two_status["status"] == "on_trip"
+
+
+def test_reassign_to_unavailable_driver_fails(client):
+    create_user(client)
+    token = get_token(client)
+    driver_one = create_driver(client, token, name="Driver One", phone="5556667777")
+    driver_two = create_driver(client, token, name="Driver Two", phone="6667778888")
+
+    trip_response = client.post(
+        "/trips/",
+        json={"source": "X", "destination": "Y"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    trip_id = trip_response.json()["id"]
+
+    client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver_one["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    # make second driver unavailable by assigning them to a new trip
+    trip_response2 = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{trip_response2.json()["id"]}/assign",
+        json={"driver_id": driver_two["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.patch(
+        f"/trips/{trip_id}/reassign",
+        json={"driver_id": driver_two["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Driver is not available"
+
+
+def test_get_drivers_license_expiry_filter(client):
+    create_user(client)
+    token = get_token(client)
+    create_driver(client, token, name="Soon Expiry", phone="1010101011", license_expiry="2025-01-01T00:00:00")
+    create_driver(client, token, name="Later Expiry", phone="2020202020", license_expiry="2030-01-01T00:00:00")
+
+    response = client.get(
+        "/drivers/?license_expiry_before=2026-01-01T00:00:00",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["name"] == "Soon Expiry"
+
+
+def test_get_drivers_requires_auth(client):
+    response = client.get("/drivers/")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
+
+
+def test_non_dispatcher_cannot_manage_trips(client, db_session):
+    create_user_with_role(db_session, username="viewer2", email="viewer2@example.com", password="secret123", role="viewer")
+    token = get_token(client, username="viewer2", password="secret123")
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Insufficient permissions"

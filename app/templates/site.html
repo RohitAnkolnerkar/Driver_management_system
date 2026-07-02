@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FleetFlow | Modern Driver Operations</title>
+    <style>
+      :root {
+        --bg: #06121f;
+        --panel: rgba(8, 15, 31, 0.92);
+        --panel-2: #0f172a;
+        --line: rgba(148, 163, 184, 0.2);
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --accent-2: #8b5cf6;
+        --success: #22c55e;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top left, rgba(56, 189, 248, 0.2), transparent 30%), linear-gradient(135deg, var(--bg), #14213d);
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      a { color: inherit; text-decoration: none; }
+      button, input, select { font: inherit; }
+
+      .auth-shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .auth-card {
+        width: min(100%, 980px);
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        overflow: hidden;
+        border-radius: 28px;
+        border: 1px solid var(--line);
+        background: rgba(8, 15, 31, 0.94);
+        box-shadow: 0 30px 60px rgba(2, 6, 23, 0.35);
+      }
+
+      .auth-copy {
+        padding: 40px;
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.14), rgba(139, 92, 246, 0.1));
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--accent);
+        margin-bottom: 24px;
+      }
+
+      .brand-badge {
+        width: 38px;
+        height: 38px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: white;
+        font-weight: 800;
+      }
+
+      .auth-copy h1 { font-size: 2.2rem; margin: 0 0 12px; }
+      .auth-copy p { color: var(--muted); line-height: 1.7; }
+
+      .feature-list { margin-top: 20px; display: grid; gap: 10px; }
+      .feature-list div { color: #cbd5e1; }
+
+      .auth-form {
+        padding: 40px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 12px;
+      }
+
+      .auth-form h2 { margin: 0 0 4px; }
+      .auth-form .sub { color: var(--muted); margin-bottom: 8px; }
+
+      .field { display: grid; gap: 6px; }
+      .field label { color: var(--muted); font-size: 0.9rem; }
+      .field input, .field select, .field button {
+        width: 100%;
+        padding: 12px 13px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+      }
+
+      .field button {
+        cursor: pointer;
+        border: none;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        font-weight: 700;
+      }
+
+      .helper { color: var(--muted); font-size: 0.95rem; }
+      .toggle-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .toggle-link {
+        color: var(--accent);
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .message { min-height: 22px; font-size: 0.95rem; }
+      .message.success { color: #86efac; }
+      .message.error { color: #fda4af; }
+
+      .app-shell { display: none; min-height: 100vh; padding: 20px; }
+      .app-frame {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        gap: 20px;
+        min-height: calc(100vh - 40px);
+      }
+
+      .sidebar, .main-panel {
+        background: rgba(8, 15, 31, 0.9);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: 0 25px 50px rgba(2, 6, 23, 0.25);
+      }
+
+      .sidebar { padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+      .sidebar .nav-item {
+        padding: 12px 14px;
+        border-radius: 12px;
+        color: var(--muted);
+        cursor: pointer;
+        transition: 0.2s ease;
+      }
+      .sidebar .nav-item:hover, .sidebar .nav-item.active {
+        background: rgba(56, 189, 248, 0.16);
+        color: var(--text);
+      }
+
+      .main-panel { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+      .topbar .pill, .topbar .ghost-btn {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.14);
+        color: var(--accent);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+      }
+      .topbar .ghost-btn {
+        cursor: pointer;
+        background: rgba(148, 163, 184, 0.12);
+        color: var(--text);
+        border-color: rgba(148, 163, 184, 0.24);
+      }
+
+      .hero-grid { display: grid; gap: 16px; grid-template-columns: 1.2fr 0.8fr; }
+      .card {
+        padding: 20px;
+        border-radius: 20px;
+        border: 1px solid var(--line);
+        background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(8, 15, 31, 0.95));
+      }
+      .card h3 { margin-top: 0; margin-bottom: 8px; }
+      .card p { color: var(--muted); line-height: 1.6; }
+
+      .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+      .stat { padding: 16px; border-radius: 16px; background: rgba(15, 23, 42, 0.9); border: 1px solid var(--line); }
+      .stat .label { color: var(--muted); font-size: 0.9rem; margin-bottom: 8px; }
+      .stat .value { font-size: 1.5rem; font-weight: 700; }
+
+      .grid-2 { display: grid; gap: 16px; grid-template-columns: 1.1fr 0.9fr; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+      th { color: var(--muted); font-size: 0.9rem; }
+      .status {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: capitalize;
+      }
+      .status.available { background: rgba(34, 197, 94, 0.16); color: #86efac; }
+      .status.on_trip { background: rgba(245, 158, 11, 0.16); color: #fcd34d; }
+      .status.assigned { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+      .status.started { background: rgba(168, 85, 247, 0.16); color: #d8b4fe; }
+      .status.completed { background: rgba(34, 197, 94, 0.16); color: #86efac; }
+      .status.cancelled { background: rgba(239, 68, 68, 0.16); color: #fda4af; }
+
+      .form-row { display: grid; gap: 10px; margin-top: 10px; }
+      .inline-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .secondary-btn {
+        background: rgba(148, 163, 184, 0.14);
+        color: var(--text);
+        border: 1px solid rgba(148, 163, 184, 0.24);
+      }
+      .muted { color: var(--muted); }
+      .empty { color: var(--muted); padding: 10px 0; }
+
+      @media (max-width: 960px) {
+        .auth-card, .app-frame, .hero-grid, .grid-2, .stats { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="auth-shell" class="auth-shell">
+      <div class="auth-card">
+        <div class="auth-copy">
+          <div class="brand"><div class="brand-badge">F</div> FleetFlow</div>
+          <h1>Modern operations for drivers, dispatchers, and admins.</h1>
+          <p>Bring your transportation workflow into one polished workspace with secure sign-in, role-aware dashboards, and room to grow into a full platform.</p>
+          <div class="feature-list">
+            <div>• Role-based access for drivers, dispatchers, and admins</div>
+            <div>• Real-time trip and driver management</div>
+            <div>• Ready for future modules like payments, routing, and analytics</div>
+          </div>
+        </div>
+        <div class="auth-form">
+          <h2 id="auth-title">Sign in to your workspace</h2>
+          <div class="sub" id="auth-subtitle">Choose your role and enter your credentials.</div>
+          <div class="field">
+            <label for="username">Username</label>
+            <input id="username" placeholder="Enter your username" />
+          </div>
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" placeholder="name@example.com" />
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input id="password" type="password" placeholder="Enter your password" />
+          </div>
+          <div class="field">
+            <label for="role">Access role</label>
+            <select id="role">
+              <option value="dispatcher">Dispatcher</option>
+              <option value="driver">Driver</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div class="field">
+            <button id="auth-btn">Continue</button>
+          </div>
+          <div class="toggle-row">
+            <div class="helper" id="auth-helper">New users can create an account here.</div>
+            <div id="toggle-auth-mode" class="toggle-link">Create account</div>
+          </div>
+          <div id="auth-message" class="message"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="app-shell" class="app-shell">
+      <div class="app-frame">
+        <aside class="sidebar">
+          <div class="brand"><div class="brand-badge">F</div> FleetFlow</div>
+          <div id="nav-items"></div>
+          <div class="card" style="margin-top:auto;">
+            <h3>Need more modules?</h3>
+            <p>This shell is designed so you can add payments, analytics, and route planning later without reworking the experience.</p>
+          </div>
+        </aside>
+
+        <main class="main-panel">
+          <div class="topbar">
+            <div>
+              <h2 style="margin:0;">Welcome back</h2>
+              <div id="workspace-title" class="muted">Loading workspace...</div>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center;">
+              <div class="pill" id="session-pill">Signed in</div>
+              <button class="ghost-btn" id="signout-btn">Sign out</button>
+            </div>
+          </div>
+
+          <section id="overview-section">
+            <div class="hero-grid">
+              <div class="card">
+                <h3 id="hero-title">Dispatch at a glance</h3>
+                <p id="hero-copy">Monitor your fleet, manage assigned work, and keep operations moving.</p>
+              </div>
+              <div class="card">
+                <h3>Quick status</h3>
+                <div id="role-badge" class="pill" style="display:inline-block; margin-top:6px;">Role</div>
+              </div>
+            </div>
+            <div class="stats" style="margin-top:16px;">
+              <div class="stat"><div class="label">Drivers</div><div class="value" id="stat-drivers">--</div></div>
+              <div class="stat"><div class="label">Available</div><div class="value" id="stat-available">--</div></div>
+              <div class="stat"><div class="label">Trips</div><div class="value" id="stat-trips">--</div></div>
+              <div class="stat"><div class="label">Completed</div><div class="value" id="stat-completed">--</div></div>
+            </div>
+          </section>
+
+          <section id="dispatch-section" style="display:none;">
+            <div class="grid-2">
+              <div class="card">
+                <h3>Dispatch operations</h3>
+                <div class="form-row">
+                  <input id="driver-name" placeholder="Driver name" />
+                  <input id="driver-phone" placeholder="Phone number" />
+                  <input id="driver-license" placeholder="License number" />
+                  <input id="driver-expiry" type="date" />
+                  <button id="create-driver-btn">Create driver</button>
+                </div>
+              </div>
+              <div class="card">
+                <h3>Trip flow</h3>
+                <div class="form-row">
+                  <input id="trip-source" placeholder="Source" />
+                  <input id="trip-destination" placeholder="Destination" />
+                  <input id="trip-distance" type="number" step="0.1" placeholder="Distance km" />
+                  <input id="trip-duration" type="number" placeholder="Duration min" />
+                  <button id="create-trip-btn">Create trip</button>
+                </div>
+                <div class="form-row">
+                  <div class="inline-row">
+                    <select id="trip-select"></select>
+                    <select id="driver-select"></select>
+                  </div>
+                  <button id="assign-trip-btn">Assign trip</button>
+                  <div class="inline-row">
+                    <button id="start-trip-btn" class="secondary-btn">Start selected trip</button>
+                    <button id="complete-trip-btn" class="secondary-btn">Complete selected trip</button>
+                  </div>
+                </div>
+                <div id="action-message" class="message"></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="drivers-section" style="display:none;">
+            <div class="card">
+              <h3>Driver roster</h3>
+              <div id="drivers-loading" class="empty">Loading drivers...</div>
+              <table>
+                <thead>
+                  <tr><th>Name</th><th>Phone</th><th>Status</th></tr>
+                </thead>
+                <tbody id="drivers-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="trips-section" style="display:none;">
+            <div class="card">
+              <h3>Trip workspace</h3>
+              <div id="trips-loading" class="empty">Loading trips...</div>
+              <table>
+                <thead>
+                  <tr><th>Route</th><th>Status</th><th>Assigned to</th></tr>
+                </thead>
+                <tbody id="trips-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const state = { token: null, user: null, activeSection: 'overview', authMode: 'login' };
+      const authShell = document.getElementById('auth-shell');
+      const appShell = document.getElementById('app-shell');
+      const authButton = document.getElementById('auth-btn');
+      const navItems = document.getElementById('nav-items');
+      const sections = {
+        overview: document.getElementById('overview-section'),
+        dispatch: document.getElementById('dispatch-section'),
+        drivers: document.getElementById('drivers-section'),
+        trips: document.getElementById('trips-section')
+      };
+
+      function setMessage(text, type = '', target = document.getElementById('auth-message')) {
+        target.className = `message ${type}`.trim();
+        target.textContent = text;
+      }
+
+      function setAuthMode(mode) {
+        state.authMode = mode;
+        const title = document.getElementById('auth-title');
+        const subtitle = document.getElementById('auth-subtitle');
+        const helper = document.getElementById('auth-helper');
+        const toggle = document.getElementById('toggle-auth-mode');
+        const button = document.getElementById('auth-btn');
+        if (mode === 'signup') {
+          title.textContent = 'Create your FleetFlow account';
+          subtitle.textContent = 'Sign up for the first time and choose your role.';
+          helper.textContent = 'Already have an account?';
+          toggle.textContent = 'Sign in';
+          button.textContent = 'Create account';
+        } else {
+          title.textContent = 'Sign in to your workspace';
+          subtitle.textContent = 'Choose your role and enter your credentials.';
+          helper.textContent = 'New users can create an account here.';
+          toggle.textContent = 'Create account';
+          button.textContent = 'Continue';
+        }
+      }
+
+      function showApp() {
+        authShell.style.display = 'none';
+        appShell.style.display = 'block';
+      }
+
+      function showAuth() {
+        appShell.style.display = 'none';
+        authShell.style.display = 'grid';
+        setAuthMode('login');
+      }
+
+      function renderNav() {
+        const role = state.user?.role || 'dispatcher';
+        const items = role === 'driver'
+          ? [
+              { id: 'overview', label: 'Overview' },
+              { id: 'trips', label: 'My Trips' }
+            ]
+          : [
+              { id: 'overview', label: 'Overview' },
+              { id: 'dispatch', label: 'Dispatch' },
+              { id: 'drivers', label: 'Drivers' },
+              { id: 'trips', label: 'Trips' }
+            ];
+
+        navItems.innerHTML = '';
+        items.forEach(item => {
+          const div = document.createElement('div');
+          div.className = `nav-item ${state.activeSection === item.id ? 'active' : ''}`;
+          div.textContent = item.label;
+          div.addEventListener('click', () => setActiveSection(item.id));
+          navItems.appendChild(div);
+        });
+      }
+
+      function setActiveSection(section) {
+        state.activeSection = section;
+        Object.entries(sections).forEach(([key, el]) => {
+          el.style.display = key === section ? 'block' : 'none';
+        });
+        renderNav();
+      }
+
+      function setSessionView() {
+        if (!state.user) {
+          showAuth();
+          return;
+        }
+        showApp();
+        document.getElementById('workspace-title').textContent = `${state.user.username} • ${state.user.role}`;
+        document.getElementById('session-pill').textContent = `Signed in as ${state.user.role}`;
+        document.getElementById('role-badge').textContent = state.user.role.toUpperCase();
+        document.getElementById('hero-title').textContent = state.user.role === 'driver' ? 'Your next trip is ready' : 'Dispatch at a glance';
+        document.getElementById('hero-copy').textContent = state.user.role === 'driver'
+          ? 'Your workspace focuses on the trips assigned to you and the status you need to keep moving.'
+          : 'Monitor your fleet, manage assigned work, and keep operations moving.';
+        renderNav();
+        setActiveSection(state.activeSection);
+        loadWorkspace();
+      }
+
+      function clearSession() {
+        state.token = null;
+        state.user = null;
+        localStorage.removeItem('fleetflow_token');
+        localStorage.removeItem('fleetflow_user');
+        showAuth();
+      }
+
+      async function loginOrCreateAccount() {
+        const username = document.getElementById('username').value.trim();
+        const email = document.getElementById('email').value.trim();
+        const password = document.getElementById('password').value;
+        const role = document.getElementById('role').value;
+        const action = document.getElementById('auth-btn');
+
+        if (!username || !password) {
+          setMessage('Please enter a username and password.', 'error');
+          return;
+        }
+
+        action.disabled = true;
+        action.textContent = 'Working...';
+
+        try {
+          if (state.authMode === 'signup') {
+            const createRes = await fetch('/users/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username, email: email || `${username}@example.com`, password, role })
+            });
+
+            const createData = await createRes.json().catch(() => ({}));
+            if (!createRes.ok) {
+              throw new Error(createData.detail || 'Unable to create account');
+            }
+            setMessage('Account created. Please sign in with your new credentials.', 'success');
+            setAuthMode('login');
+            return;
+          }
+
+          const tokenRes = await fetch('/auth/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ username, password })
+          });
+          const tokenData = await tokenRes.json();
+          if (!tokenRes.ok) throw new Error(tokenData.detail || 'Login failed');
+
+          state.token = tokenData.access_token;
+          localStorage.setItem('fleetflow_token', state.token);
+          const profileRes = await fetch('/users/me', { headers: { Authorization: `Bearer ${state.token}` } });
+          const profileData = await profileRes.json();
+          if (!profileRes.ok) throw new Error(profileData.detail || 'Unable to load profile');
+          state.user = profileData;
+          localStorage.setItem('fleetflow_user', JSON.stringify(state.user));
+          setMessage('Authenticated successfully.', 'success');
+          setSessionView();
+        } catch (error) {
+          setMessage(error.message || 'Unable to continue.', 'error');
+        } finally {
+          action.disabled = false;
+          action.textContent = 'Continue';
+        }
+      }
+
+      async function loadWorkspace() {
+        if (!state.token || !state.user) return;
+        const headers = { Authorization: `Bearer ${state.token}` };
+
+        try {
+          const summaryRes = await fetch('/drivers/dashboard/summary', { headers });
+          const summary = summaryRes.ok ? await summaryRes.json() : null;
+          if (summary) {
+            document.getElementById('stat-drivers').textContent = summary.total_drivers ?? '--';
+            document.getElementById('stat-available').textContent = summary.available_drivers ?? '--';
+            document.getElementById('stat-trips').textContent = summary.active_trips ?? '--';
+            document.getElementById('stat-completed').textContent = summary.completed_trips ?? '--';
+          }
+
+          const driversRes = await fetch('/drivers/?limit=8', { headers });
+          const drivers = driversRes.ok ? await driversRes.json() : [];
+          const driversBody = document.getElementById('drivers-body');
+          driversBody.innerHTML = '';
+          if (!drivers.length) {
+            driversBody.innerHTML = '<tr><td colspan="3" class="empty">No drivers found.</td></tr>';
+          } else {
+            drivers.forEach(driver => {
+              const tr = document.createElement('tr');
+              tr.innerHTML = `<td>${driver.name}</td><td>${driver.phone}</td><td><span class="status ${driver.status}">${driver.status}</span></td>`;
+              driversBody.appendChild(tr);
+            });
+          }
+          document.getElementById('drivers-loading').textContent = '';
+
+          const tripsRes = await fetch('/trips/?limit=8', { headers });
+          const trips = tripsRes.ok ? await tripsRes.json() : [];
+          const tripsBody = document.getElementById('trips-body');
+          tripsBody.innerHTML = '';
+          if (!trips.length) {
+            tripsBody.innerHTML = '<tr><td colspan="3" class="empty">No trips found.</td></tr>';
+          } else {
+            trips.forEach(trip => {
+              const tr = document.createElement('tr');
+              const driverName = trip.driver?.name || 'Unassigned';
+              tr.innerHTML = `<td>${trip.source} → ${trip.destination}</td><td><span class="status ${trip.status}">${trip.status}</span></td><td>${driverName}</td>`;
+              tripsBody.appendChild(tr);
+            });
+          }
+          document.getElementById('trips-loading').textContent = '';
+
+          if (state.user.role !== 'driver') {
+            const tripSelect = document.getElementById('trip-select');
+            const driverSelect = document.getElementById('driver-select');
+            tripSelect.innerHTML = '<option value="">Select a trip</option>';
+            driverSelect.innerHTML = '<option value="">Select a driver</option>';
+            trips.forEach(trip => {
+              const option = document.createElement('option');
+              option.value = trip.id;
+              option.textContent = `${trip.source} → ${trip.destination} (${trip.status})`;
+              tripSelect.appendChild(option);
+            });
+            drivers.filter(driver => driver.status === 'available').forEach(driver => {
+              const option = document.createElement('option');
+              option.value = driver.id;
+              option.textContent = `${driver.name} (${driver.phone})`;
+              driverSelect.appendChild(option);
+            });
+          }
+        } catch (error) {
+          setMessage(error.message || 'Unable to load workspace.', 'error', document.getElementById('action-message'));
+        }
+      }
+
+      async function createDriver() {
+        if (!state.token) return;
+        const payload = {
+          name: document.getElementById('driver-name').value.trim(),
+          phone: document.getElementById('driver-phone').value.trim(),
+          license_number: document.getElementById('driver-license').value.trim(),
+          license_expiry: document.getElementById('driver-expiry').value
+        };
+        try {
+          const res = await fetch('/drivers/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Driver creation failed');
+          setMessage(`Created ${data.name}`, 'success', document.getElementById('action-message'));
+          document.getElementById('driver-name').value = '';
+          document.getElementById('driver-phone').value = '';
+          document.getElementById('driver-license').value = '';
+          document.getElementById('driver-expiry').value = '';
+          await loadWorkspace();
+        } catch (error) {
+          setMessage(error.message || 'Unable to create driver.', 'error', document.getElementById('action-message'));
+        }
+      }
+
+      async function createTrip() {
+        if (!state.token) return;
+        const payload = {
+          source: document.getElementById('trip-source').value.trim(),
+          destination: document.getElementById('trip-destination').value.trim(),
+          distance_km: document.getElementById('trip-distance').value ? parseFloat(document.getElementById('trip-distance').value) : null,
+          duration_minutes: document.getElementById('trip-duration').value ? parseInt(document.getElementById('trip-duration').value, 10) : null
+        };
+        try {
+          const res = await fetch('/trips/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Trip creation failed');
+          setMessage(`Created trip to ${data.destination}`, 'success', document.getElementById('action-message'));
+          document.getElementById('trip-source').value = '';
+          document.getElementById('trip-destination').value = '';
+          document.getElementById('trip-distance').value = '';
+          document.getElementById('trip-duration').value = '';
+          await loadWorkspace();
+        } catch (error) {
+          setMessage(error.message || 'Unable to create trip.', 'error', document.getElementById('action-message'));
+        }
+      }
+
+      async function assignTrip() {
+        const tripId = document.getElementById('trip-select').value;
+        const driverId = document.getElementById('driver-select').value;
+        if (!tripId || !driverId) {
+          setMessage('Choose a trip and a driver first.', 'error', document.getElementById('action-message'));
+          return;
+        }
+        try {
+          const res = await fetch(`/trips/${tripId}/assign`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+            body: JSON.stringify({ driver_id: parseInt(driverId, 10) })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || 'Assignment failed');
+          setMessage(data.message || 'Trip assigned', 'success', document.getElementById('action-message'));
+          await loadWorkspace();
+        } catch (error) {
+          setMessage(error.message || 'Unable to assign trip.', 'error', document.getElementById('action-message'));
+        }
+      }
+
+      async function updateTripLifecycle(action) {
+        const tripId = document.getElementById('trip-select').value;
+        if (!tripId) {
+          setMessage('Choose a trip first.', 'error', document.getElementById('action-message'));
+          return;
+        }
+        try {
+          const res = await fetch(`/trips/${tripId}/${action}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${state.token}` }
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || `Unable to ${action} trip`);
+          setMessage(data.message || `Trip ${action}d`, 'success', document.getElementById('action-message'));
+          await loadWorkspace();
+        } catch (error) {
+          setMessage(error.message || `Unable to ${action} trip.`, 'error', document.getElementById('action-message'));
+        }
+      }
+
+      authButton.addEventListener('click', loginOrCreateAccount);
+      document.getElementById('signout-btn').addEventListener('click', clearSession);
+      document.getElementById('toggle-auth-mode').addEventListener('click', () => {
+        setAuthMode(state.authMode === 'login' ? 'signup' : 'login');
+      });
+      setAuthMode('login');
+      document.getElementById('create-driver-btn').addEventListener('click', createDriver);
+      document.getElementById('create-trip-btn').addEventListener('click', createTrip);
+      document.getElementById('assign-trip-btn').addEventListener('click', assignTrip);
+      document.getElementById('start-trip-btn').addEventListener('click', () => updateTripLifecycle('start'));
+      document.getElementById('complete-trip-btn').addEventListener('click', () => updateTripLifecycle('complete'));
+
+      const persistedToken = localStorage.getItem('fleetflow_token');
+      const persistedUser = localStorage.getItem('fleetflow_user');
+      if (persistedToken && persistedUser) {
+        state.token = persistedToken;
+        state.user = JSON.parse(persistedUser);
+        setSessionView();
+      }
+    </script>
+  </body>
+</html>
