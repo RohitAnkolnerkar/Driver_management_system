@@ -151,7 +151,7 @@ def test_create_trip_with_company_fields(client):
     trip = response.json()
     assert trip["source_company"] == "Acme Logistics"
     assert trip["destination_company"] == "Beta Warehousing"
-    assert trip["cost_per_trip"] == 3.0 + 10.0 * 1.5 + 30 * 0.25
+    assert trip["cost_per_trip"] == 40.0 + 10.0 * 12.0 + 30 * 1.5
     assert trip["time_taken_minutes"] == 30
 
 
@@ -184,7 +184,7 @@ def test_list_trips_by_source_company_and_date(client):
     assert len(trips) == 1
     assert trips[0]["id"] == trip["id"]
     assert trips[0]["source_company"] == "Acme Logistics"
-    assert trips[0]["cost_per_trip"] == 3.0 + 20.0 * 1.5 + 45 * 0.25
+    assert trips[0]["cost_per_trip"] == 40.0 + 20.0 * 12.0 + 45 * 1.5
     assert trips[0]["time_taken_minutes"] == 45
 
 
@@ -233,6 +233,72 @@ def test_assign_invalid_driver_id(client):
     )
     assert response.status_code == 404
     assert response.json()["detail"] == "Driver not found"
+
+
+def test_bulk_assign_trips_to_driver(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Bulk Driver", phone="5551112222")
+
+    trip_one = client.post(
+        "/trips/",
+        json={"source": "North", "destination": "West"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    trip_two = client.post(
+        "/trips/",
+        json={"source": "East", "destination": "South"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    response = client.post(
+        "/trips/bulk-assign",
+        json={"trip_ids": [trip_one["id"], trip_two["id"]], "driver_id": driver["id"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["assigned_count"] == 2
+    assert payload["driver_id"] == driver["id"]
+    assert set(payload["trip_ids"]) == {trip_one["id"], trip_two["id"]}
+
+    for trip_id in [trip_one["id"], trip_two["id"]]:
+        trip_response = client.get(f"/trips/{trip_id}", headers={"Authorization": f"Bearer {token}"})
+        assert trip_response.status_code == 200
+        trip_data = trip_response.json()
+        assert trip_data["driver_id"] == driver["id"]
+        assert trip_data["status"] == "assigned"
+
+
+def test_bulk_cancel_trips(client):
+    create_user(client)
+    token = get_token(client)
+
+    trip_one = client.post(
+        "/trips/",
+        json={"source": "North", "destination": "West"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    trip_two = client.post(
+        "/trips/",
+        json={"source": "East", "destination": "South"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    response = client.post(
+        "/trips/bulk-cancel",
+        json={"trip_ids": [trip_one["id"], trip_two["id"]], "reason": "No longer needed"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cancelled_count"] == 2
+    assert set(payload["trip_ids"]) == {trip_one["id"], trip_two["id"]}
+
+    for trip_id in [trip_one["id"], trip_two["id"]]:
+        trip_response = client.get(f"/trips/{trip_id}", headers={"Authorization": f"Bearer {token}"})
+        assert trip_response.status_code == 200
+        assert trip_response.json()["status"] == "cancelled"
 
 
 def test_start_trip_before_assign(client):
@@ -316,6 +382,153 @@ def test_get_driver_by_id(client):
     assert response.status_code == 200
     assert response.json()["name"] == "Detail Driver"
     assert response.json()["phone"] == "7778889999"
+
+
+def test_get_driver_availability_history(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="History Driver", phone="5556668888")
+
+    response = client.patch(
+        f"/drivers/{driver['id']}",
+        json={"status": "inactive"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    history_response = client.get(
+        f"/drivers/{driver['id']}/availability-history",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert history_response.status_code == 200
+    history = history_response.json()
+    assert any(entry["status"] == "inactive" for entry in history)
+    assert any(entry["driver_id"] == driver["id"] for entry in history)
+
+
+def test_get_driver_availability_analytics(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Analytics Driver", phone="5556669999")
+
+    response = client.patch(
+        f"/drivers/{driver['id']}",
+        json={"status": "inactive"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    analytics_response = client.get(
+        f"/drivers/{driver['id']}/availability-analytics",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert analytics_response.status_code == 200
+    analytics = analytics_response.json()
+    assert analytics["driver_id"] == driver["id"]
+    assert analytics["inactive_minutes"] >= 0
+    assert analytics["total_observed_minutes"] >= 0
+
+
+def test_get_driver_daily_availability_analytics(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Daily Analytics Driver", phone="5556670000")
+
+    response = client.patch(
+        f"/drivers/{driver['id']}",
+        json={"status": "inactive"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    analytics_response = client.get(
+        f"/drivers/{driver['id']}/daily-availability-analytics",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert analytics_response.status_code == 200
+    analytics = analytics_response.json()
+    assert isinstance(analytics, list)
+    assert analytics[0]["date"]
+
+
+def test_get_dispatcher_workload_summary(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.get("/drivers/dashboard/workload-summary", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    summary = response.json()
+    assert "total_drivers" in summary
+    assert "available_drivers" in summary
+    assert "pending_trips" in summary
+    assert summary["total_drivers"] >= 0
+
+
+def test_get_trip_history(client):
+    create_user(client)
+    token = get_token(client)
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    trip_id = response.json()["id"]
+
+    history_response = client.get(f"/trips/{trip_id}/history", headers={"Authorization": f"Bearer {token}"})
+    assert history_response.status_code == 200
+    history = history_response.json()
+    assert any(entry["status"] == "created" for entry in history)
+
+
+def test_get_driver_performance(client):
+    create_user(client)
+    token = get_token(client)
+    driver = create_driver(client, token, name="Performance Driver", phone="5556667778")
+
+    completed_trip = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B", "distance_km": 12.0, "duration_minutes": 30},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{completed_trip['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{completed_trip['id']}/start",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{completed_trip['id']}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    cancelled_trip = client.post(
+        "/trips/",
+        json={"source": "C", "destination": "D", "distance_km": 8.0, "duration_minutes": 20},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    client.patch(
+        f"/trips/{cancelled_trip['id']}/assign",
+        json={"driver_id": driver['id']},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    client.patch(
+        f"/trips/{cancelled_trip['id']}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = client.get(f"/drivers/{driver['id']}/performance", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    performance = response.json()
+    assert performance["completed_trips"] == 1
+    assert performance["cancelled_trips"] == 1
+    assert performance["total_trips"] == 2
+    assert performance["completion_rate"] == 50.0
+    assert performance["cancellation_rate"] == 50.0
 
 
 def test_get_driver_summary(client):
@@ -566,6 +779,7 @@ def test_get_dashboard_summary(client):
     assert summary["active_trips"] == 1
     assert summary["completed_trips"] == 0
     assert summary["cancelled_trips"] == 0
+    assert summary["total_trips_today"] == 1
 
 
 def test_get_trip_stats(client):
@@ -617,8 +831,8 @@ def test_get_trip_stats(client):
     assert stats["created_trips"] == 0
     assert stats["assigned_trips"] == 0
     assert stats["started_trips"] == 0
-    assert stats["total_estimated_fare"] == 23.0 + 3.0
-    assert stats["average_estimated_fare"] == round((23.0 + 3.0) / 2, 2)
+    assert stats["total_estimated_fare"] == 230.0
+    assert stats["average_estimated_fare"] == round((190.0 + 40.0) / 2, 2)
 
 
 def test_trip_response_includes_driver_info(client):
@@ -751,10 +965,10 @@ def test_estimate_trip_fare(client):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["base_fare"] == 3.0
+    assert data["base_fare"] == 40.0
     assert data["distance_km"] == 10.0
     assert data["duration_minutes"] == 15
-    assert data["estimated_fare"] == 3.0 + 10.0 * 1.5 + 15 * 0.25
+    assert data["estimated_fare"] == 40.0 + 10.0 * 12.0 + 15 * 1.5
 
 
 def test_estimate_trip_fare_validation(client):
@@ -782,7 +996,7 @@ def test_create_trip_with_distance_and_duration(client):
     trip = response.json()
     assert trip["distance_km"] == 8.0
     assert trip["duration_minutes"] == 20
-    assert trip["estimated_fare"] == 3.0 + 8.0 * 1.5 + 20 * 0.25
+    assert trip["estimated_fare"] == 40.0 + 8.0 * 12.0 + 20 * 1.5
 
 
 def test_update_trip_before_assignment(client):
@@ -807,7 +1021,7 @@ def test_update_trip_before_assignment(client):
     assert updated["destination"] == "NewTown"
     assert updated["distance_km"] == 5.5
     assert updated["duration_minutes"] == 12
-    assert updated["estimated_fare"] == 3.0 + 5.5 * 1.5 + 12 * 0.25
+    assert updated["estimated_fare"] == 40.0 + 5.5 * 12.0 + 12 * 1.5
 
 
 def test_get_driver_earnings(client):
@@ -844,7 +1058,7 @@ def test_get_driver_earnings(client):
     earnings_response = client.get(f"/drivers/{driver['id']}/earnings", headers={"Authorization": f"Bearer {token}"})
     assert earnings_response.status_code == 200
     earnings = earnings_response.json()
-    expected_total = round(3.0 + 10.0 * 1.5 + 20 * 0.25 + 3.0 + 5.0 * 1.5 + 10 * 0.25, 2)
+    expected_total = round(40.0 + 10.0 * 12.0 + 20 * 1.5 + 40.0 + 5.0 * 12.0 + 10 * 1.5, 2)
     assert earnings["completed_trips"] == 2
     assert earnings["total_earnings"] == expected_total
     assert earnings["average_fare"] == round(expected_total / 2, 2)
@@ -936,7 +1150,7 @@ def test_driver_leaderboard_orders_by_earnings(client):
 
     assert leaderboard[0]["driver_id"] == top_driver["id"]
     assert leaderboard[0]["total_earnings"] > leaderboard[1]["total_earnings"]
-    assert leaderboard[0]["average_fare"] == round((3.0 + 10 * 1.5 + 20 * 0.25), 2)
+    assert leaderboard[0]["average_fare"] == round((40.0 + 10 * 12.0 + 20 * 1.5), 2)
     assert leaderboard[1]["driver_id"] == second_driver["id"]
 
 
@@ -961,7 +1175,7 @@ def test_update_and_get_trip_summary(client):
     assert summary["trip_id"] == trip_id
     assert summary["distance_km"] == 12.5
     assert summary["duration_minutes"] == 30
-    assert summary["estimated_fare"] == 3.0 + 12.5 * 1.5 + 30 * 0.25
+    assert summary["estimated_fare"] == 40.0 + 12.5 * 12.0 + 30 * 1.5
 
     get_summary = client.get(f"/trips/{trip_id}/summary", headers={"Authorization": f"Bearer {token}"})
     assert get_summary.status_code == 200

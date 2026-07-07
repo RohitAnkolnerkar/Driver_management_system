@@ -238,7 +238,7 @@
         <div class="stat"><div class="label">Total Drivers</div><div class="value" id="total-drivers">--</div></div>
         <div class="stat"><div class="label">Available Drivers</div><div class="value" id="available-drivers">--</div></div>
         <div class="stat"><div class="label">Active Trips</div><div class="value" id="active-trips">--</div></div>
-        <div class="stat"><div class="label">Completed Trips</div><div class="value" id="completed-trips">--</div></div>
+        <div class="stat"><div class="label">Total Trips Today</div><div class="value" id="total-trips-today">--</div></div>
       </div>
 
       <div class="grid">
@@ -406,7 +406,7 @@
             document.getElementById('total-drivers').textContent = summary.total_drivers ?? '--';
             document.getElementById('available-drivers').textContent = summary.available_drivers ?? '--';
             document.getElementById('active-trips').textContent = summary.active_trips ?? '--';
-            document.getElementById('completed-trips').textContent = summary.completed_trips ?? '--';
+            document.getElementById('total-trips-today').textContent = summary.total_trips_today ?? '--';
           }
 
           const driversRes = await fetch('/drivers/?limit=10', { headers });

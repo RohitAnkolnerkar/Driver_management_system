@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from app.db import Base
 import datetime
 
+
 class Driver(Base):
     __tablename__ = "drivers"
 
@@ -20,5 +21,22 @@ class Driver(Base):
         primaryjoin="Driver.user_id == User.id",
         foreign_keys="[Driver.user_id]",
     )
-    user_id = Column(Integer, ForeignKey("users.id"))
+    availability_history = relationship(
+        "DriverAvailabilityHistory",
+        back_populates="driver",
+        cascade="all, delete-orphan",
+        order_by="DriverAvailabilityHistory.changed_at.desc()",
+    )
+
+
+class DriverAvailabilityHistory(Base):
+    __tablename__ = "driver_availability_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    status = Column(String, nullable=False)
+    changed_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    note = Column(String, nullable=True)
+
+    driver = relationship("Driver", back_populates="availability_history")
     

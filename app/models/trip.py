@@ -29,6 +29,12 @@ class Trip(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     driver = relationship("Driver", backref="trips")
+    history = relationship(
+        "TripHistory",
+        back_populates="trip",
+        cascade="all, delete-orphan",
+        order_by="TripHistory.changed_at.asc()",
+    )
 
     @property
     def driver_name(self):
@@ -49,3 +55,15 @@ class Trip(Base):
         if self.start_time is not None and self.end_time is not None:
             return int((self.end_time - self.start_time).total_seconds() / 60)
         return None
+
+
+class TripHistory(Base):
+    __tablename__ = "trip_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False, index=True)
+    status = Column(String, nullable=False)
+    changed_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    note = Column(String, nullable=True)
+
+    trip = relationship("Trip", back_populates="history")

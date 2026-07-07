@@ -19,6 +19,27 @@ class AssignDriver(BaseModel):
     driver_id: int
 
 
+class BulkTripAssignmentRequest(BaseModel):
+    trip_ids: list[int]
+    driver_id: int
+
+
+class BulkTripAssignmentResponse(BaseModel):
+    assigned_count: int
+    driver_id: int
+    trip_ids: list[int]
+
+
+class BulkTripCancelRequest(BaseModel):
+    trip_ids: list[int]
+    reason: Optional[str] = None
+
+
+class BulkTripCancelResponse(BaseModel):
+    cancelled_count: int
+    trip_ids: list[int]
+
+
 class TripUpdate(BaseModel):
     source: Optional[str] = None
     destination: Optional[str] = None
@@ -72,6 +93,16 @@ class TripSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TripHistoryResponse(BaseModel):
+    id: int
+    trip_id: int
+    status: str
+    changed_at: datetime
+    note: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TripStatsResponse(BaseModel):
     total_trips: int
     created_trips: int
@@ -92,8 +123,10 @@ class TripFareEstimateRequest(BaseModel):
 
 class TripFareEstimateResponse(BaseModel):
     base_fare: float
+    base_fare_currency: str = "INR"
     distance_km: float
     duration_minutes: Optional[int] = None
     estimated_fare: float
+    estimated_fare_currency: str = "INR"
 
     model_config = ConfigDict(from_attributes=True)

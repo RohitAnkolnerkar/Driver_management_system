@@ -11,7 +11,6 @@ from sqlalchemy import and_
 from sqlalchemy import func, case
 from app.api.deps import get_current_user, require_roles
 from app.db import get_db
-from app.models.driver import Driver
 from app.models.trip import Trip
 from app.schemas.driver import (
     DriverCreate,
@@ -19,13 +18,25 @@ from app.schemas.driver import (
     DriverStatus,
     DriverStatusUpdate,
     DriverSummaryResponse,
+    DriverAvailabilityHistoryResponse,
+    DriverAvailabilityAnalyticsResponse,
+    DriverDailyAvailabilityAnalyticsResponse,
+    DispatcherWorkloadSummaryResponse,
+    DriverPerformanceResponse,
     DriverEarningsResponse,
     DriverLeaderboardResponse,
     DriverUpdate,
 )
+from app.models.driver import Driver, DriverAvailabilityHistory
 from app.schemas.trip import TripResponse
 
 router = APIRouter(prefix="/drivers", tags=["Drivers"])
+
+
+def record_driver_status_change(db: Session, driver_id: int, status: str, note: Optional[str] = None):
+    history_entry = DriverAvailabilityHistory(driver_id=driver_id, status=status, note=note)
+    db.add(history_entry)
+    return history_entry
 
 
 @router.post("/", response_model=DriverResponse)
@@ -33,6 +44,8 @@ def create_driver(driver: DriverCreate, db: Session = Depends(get_db), current_u
     db_driver = Driver(**driver.dict())
     db.add(db_driver)
     try:
+        db.flush()
+        record_driver_status_change(db, db_driver.id, db_driver.status, "driver created")
         db.commit()
         db.refresh(db_driver)
         return db_driver
@@ -140,6 +153,8 @@ def get_dashboard_summary(
     active_trips = db.query(Trip).filter(Trip.status.in_(["assigned", "started"])).count()
     completed_trips = db.query(Trip).filter(Trip.status == "completed").count()
     cancelled_trips = db.query(Trip).filter(Trip.status == "cancelled").count()
+    today = datetime.utcnow().date()
+    total_trips_today = db.query(Trip).filter(func.date(Trip.created_at) == today).count()
 
     return {
         "total_drivers": total_drivers,
@@ -149,6 +164,7 @@ def get_dashboard_summary(
         "active_trips": active_trips,
         "completed_trips": completed_trips,
         "cancelled_trips": cancelled_trips,
+        "total_trips_today": total_trips_today,
     }
 
 
@@ -162,7 +178,7 @@ def get_driver(driver_id: int, db: Session = Depends(get_db), current_user=Depen
 
 
 
-@router.get("/drivers/{driver_id}/summary")
+@router.get("/{driver_id}/summary")
 def get_driver_summary(
     driver_id: int,
     db: Session = Depends(get_db),
@@ -197,6 +213,49 @@ def get_driver_summary(
         "started_trips": stats.started or 0,
         "cancelled_trips": stats.cancelled or 0,
     }
+
+@router.get("/{driver_id}/performance", response_model=DriverPerformanceResponse)
+def get_driver_performance(
+    driver_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if current_user.role == "driver" and current_user.driver_profile and current_user.driver_profile.id != driver_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this driver performance")
+
+    stats = db.query(
+        func.count(Trip.id).label("total_trips"),
+        func.sum(case((Trip.status == "completed", 1), else_=0)).label("completed_trips"),
+        func.sum(case((Trip.status == "cancelled", 1), else_=0)).label("cancelled_trips"),
+        func.sum(case((Trip.status == "assigned", 1), else_=0)).label("assigned_trips"),
+        func.sum(case((Trip.status == "started", 1), else_=0)).label("started_trips"),
+        func.coalesce(func.sum(Trip.estimated_fare), 0.0).label("total_earnings"),
+    ).filter(Trip.driver_id == driver_id).one()
+
+    total_trips = int(stats.total_trips or 0)
+    completed_trips = int(stats.completed_trips or 0)
+    cancelled_trips = int(stats.cancelled_trips or 0)
+    completion_rate = round((completed_trips / total_trips) * 100, 2) if total_trips else 0.0
+    cancellation_rate = round((cancelled_trips / total_trips) * 100, 2) if total_trips else 0.0
+    average_fare = float(stats.total_earnings) / completed_trips if completed_trips else 0.0
+
+    return {
+        "driver_id": driver.id,
+        "total_trips": total_trips,
+        "completed_trips": completed_trips,
+        "cancelled_trips": cancelled_trips,
+        "assigned_trips": int(stats.assigned_trips or 0),
+        "started_trips": int(stats.started_trips or 0),
+        "completion_rate": completion_rate,
+        "cancellation_rate": cancellation_rate,
+        "total_earnings": float(stats.total_earnings or 0.0),
+        "average_fare": round(average_fare, 2),
+    }
+
 
 @router.get("/{driver_id}/earnings", response_model=DriverEarningsResponse)
 def get_driver_earnings(
@@ -278,6 +337,7 @@ def update_driver(driver_id: int, driver_update: DriverUpdate, db: Session = Dep
         driver.phone = driver_update.phone
     if driver_update.status is not None:
         driver.status = driver_update.status.value
+        record_driver_status_change(db, driver.id, driver.status, "status updated")
     if driver_update.license_number is not None:
         driver.license_number = driver_update.license_number
     if driver_update.license_expiry is not None:
@@ -293,6 +353,219 @@ def update_driver(driver_id: int, driver_update: DriverUpdate, db: Session = Dep
         if "duplicate" in err or "unique" in err or "already exists" in err:
             raise HTTPException(status_code=400, detail="Driver with this phone already exists")
         raise HTTPException(status_code=400, detail="Database integrity error")
+
+
+@router.get(
+    "/dashboard/workload-summary",
+    response_model=DispatcherWorkloadSummaryResponse,
+)
+def get_dispatcher_workload_summary(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    today = datetime.utcnow().date()
+
+    # Driver statistics (1 query)
+    driver_stats = (
+        db.query(
+            func.count(Driver.id).label("total_drivers"),
+            func.sum(
+                case((Driver.status == "available", 1), else_=0)
+            ).label("available_drivers"),
+            func.sum(
+                case((Driver.status == "on_trip", 1), else_=0)
+            ).label("on_trip_drivers"),
+            func.sum(
+                case((Driver.status == "inactive", 1), else_=0)
+            ).label("inactive_drivers"),
+        )
+        .one()
+    )
+
+    # Trip statistics (1 query)
+    trip_stats = (
+        db.query(
+            func.sum(
+                case((Trip.status == "assigned", 1), else_=0)
+            ).label("assigned_trips"),
+            func.sum(
+                case((Trip.status == "started", 1), else_=0)
+            ).label("started_trips"),
+            func.sum(
+                case((Trip.status == "completed", 1), else_=0)
+            ).label("completed_trips"),
+            func.sum(
+                case((Trip.status == "cancelled", 1), else_=0)
+            ).label("cancelled_trips"),
+            func.sum(
+                case((Trip.status.in_(["created", "assigned"]), 1), else_=0)
+            ).label("pending_trips"),
+            func.sum(
+                case((func.date(Trip.created_at) == today, 1), else_=0)
+            ).label("total_trips_today"),
+        )
+        .one()
+    )
+
+    assigned_trips = trip_stats.assigned_trips or 0
+    started_trips = trip_stats.started_trips or 0
+
+    return {
+        "total_drivers": driver_stats.total_drivers or 0,
+        "available_drivers": driver_stats.available_drivers or 0,
+        "on_trip_drivers": driver_stats.on_trip_drivers or 0,
+        "inactive_drivers": driver_stats.inactive_drivers or 0,
+        "active_trips": assigned_trips + started_trips,
+        "assigned_trips": assigned_trips,
+        "started_trips": started_trips,
+        "completed_trips": trip_stats.completed_trips or 0,
+        "cancelled_trips": trip_stats.cancelled_trips or 0,
+        "pending_trips": trip_stats.pending_trips or 0,
+        "total_trips_today": trip_stats.total_trips_today or 0,
+    }
+
+
+@router.get("/{driver_id}/availability-history", response_model=list[DriverAvailabilityHistoryResponse])
+def get_driver_availability_history(
+    driver_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if current_user.role == "driver" and current_user.driver_profile and current_user.driver_profile.id != driver_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this driver history")
+
+    history = (
+        db.query(DriverAvailabilityHistory)
+        .filter(DriverAvailabilityHistory.driver_id == driver_id)
+        .order_by(DriverAvailabilityHistory.changed_at.desc())
+        .all()
+    )
+    return history
+
+
+@router.get("/{driver_id}/availability-analytics", response_model=DriverAvailabilityAnalyticsResponse)
+def get_driver_availability_analytics(
+    driver_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if current_user.role == "driver" and current_user.driver_profile and current_user.driver_profile.id != driver_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this driver analytics")
+
+    history = (
+        db.query(DriverAvailabilityHistory)
+        .filter(DriverAvailabilityHistory.driver_id == driver_id)
+        .order_by(DriverAvailabilityHistory.changed_at.asc())
+        .all()
+    )
+
+    if not history:
+        return {
+            "driver_id": driver.id,
+            "driver_name": driver.name,
+            "available_minutes": 0,
+            "on_trip_minutes": 0,
+            "inactive_minutes": 0,
+            "total_observed_minutes": 0,
+        }
+
+    available_minutes = 0
+    on_trip_minutes = 0
+    inactive_minutes = 0
+    now = datetime.utcnow()
+
+    for index, entry in enumerate(history):
+        if index == len(history) - 1:
+            end_time = now
+        else:
+            end_time = history[index + 1].changed_at
+
+        if end_time <= entry.changed_at:
+            continue
+
+        duration_minutes = int((end_time - entry.changed_at).total_seconds() // 60)
+        if entry.status == "available":
+            available_minutes += duration_minutes
+        elif entry.status == "on_trip":
+            on_trip_minutes += duration_minutes
+        elif entry.status == "inactive":
+            inactive_minutes += duration_minutes
+
+    return {
+        "driver_id": driver.id,
+        "driver_name": driver.name,
+        "available_minutes": available_minutes,
+        "on_trip_minutes": on_trip_minutes,
+        "inactive_minutes": inactive_minutes,
+        "total_observed_minutes": available_minutes + on_trip_minutes + inactive_minutes,
+    }
+
+
+@router.get("/{driver_id}/daily-availability-analytics", response_model=list[DriverDailyAvailabilityAnalyticsResponse])
+def get_driver_daily_availability_analytics(
+    driver_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if current_user.role == "driver" and current_user.driver_profile and current_user.driver_profile.id != driver_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this driver analytics")
+
+    history = (
+        db.query(DriverAvailabilityHistory)
+        .filter(DriverAvailabilityHistory.driver_id == driver_id)
+        .order_by(DriverAvailabilityHistory.changed_at.asc())
+        .all()
+    )
+
+    daily_groups = {}
+    now = datetime.utcnow()
+
+    for index, entry in enumerate(history):
+        if index == len(history) - 1:
+            end_time = now
+        else:
+            end_time = history[index + 1].changed_at
+
+        if end_time <= entry.changed_at:
+            continue
+
+        duration_minutes = int((end_time - entry.changed_at).total_seconds() // 60)
+        day_key = entry.changed_at.date().isoformat()
+
+        if day_key not in daily_groups:
+            daily_groups[day_key] = {
+                "date": day_key,
+                "available_minutes": 0,
+                "on_trip_minutes": 0,
+                "inactive_minutes": 0,
+            }
+
+        if entry.status == "available":
+            daily_groups[day_key]["available_minutes"] += duration_minutes
+        elif entry.status == "on_trip":
+            daily_groups[day_key]["on_trip_minutes"] += duration_minutes
+        elif entry.status == "inactive":
+            daily_groups[day_key]["inactive_minutes"] += duration_minutes
+
+    result = []
+    for day_key in sorted(daily_groups):
+        item = daily_groups[day_key]
+        item["total_observed_minutes"] = item["available_minutes"] + item["on_trip_minutes"] + item["inactive_minutes"]
+        result.append(item)
+
+    return result
 
 
 @router.get("/{driver_id}/trips", response_model=List[TripResponse])
