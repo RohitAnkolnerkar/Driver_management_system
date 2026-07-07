@@ -5,8 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
-
-from app.api.deps import get_current_user, require_dispatcher_or_admin
+from fastapi import Query
+from typing import Optional, List
+from sqlalchemy import and_
+from sqlalchemy import func, case
+from app.api.deps import get_current_user, require_roles
 from app.db import get_db
 from app.models.driver import Driver
 from app.models.trip import Trip
@@ -26,7 +29,7 @@ router = APIRouter(prefix="/drivers", tags=["Drivers"])
 
 
 @router.post("/", response_model=DriverResponse)
-def create_driver(driver: DriverCreate, db: Session = Depends(get_db), current_user=Depends(require_dispatcher_or_admin)):
+def create_driver(driver: DriverCreate, db: Session = Depends(get_db), current_user=Depends(require_roles('admin','dispatcher'))):
     db_driver = Driver(**driver.dict())
     db.add(db_driver)
     try:
@@ -50,7 +53,7 @@ def get_drivers(
     license_expiry_before: Optional[datetime] = None,
     license_expiry_after: Optional[datetime] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     """List drivers with pagination and optional filtering.
 
@@ -157,26 +160,43 @@ def get_driver(driver_id: int, db: Session = Depends(get_db), current_user=Depen
     return driver
 
 
-@router.get("/{driver_id}/summary", response_model=DriverSummaryResponse)
-def get_driver_summary(driver_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+
+
+@router.get("/drivers/{driver_id}/summary")
+def get_driver_summary(
+    driver_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
+
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    total_trips = db.query(Trip).filter(Trip.driver_id == driver_id).count()
-    completed_trips = db.query(Trip).filter(Trip.driver_id == driver_id, Trip.status == "completed").count()
-    assigned_trips = db.query(Trip).filter(Trip.driver_id == driver_id, Trip.status == "assigned").count()
-    started_trips = db.query(Trip).filter(Trip.driver_id == driver_id, Trip.status == "started").count()
-    cancelled_trips = db.query(Trip).filter(Trip.driver_id == driver_id, Trip.status == "cancelled").count()
+    # 🔐 Restrict driver access
+    if current_user.role == "driver":
+        if not current_user.driver_profile or current_user.driver_profile.id != driver_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to view this driver summary",
+            )
+
+    # ⚡ Optimized single query
+    stats = db.query(
+        func.count(Trip.id).label("total"),
+        func.sum(case((Trip.status == "completed", 1), else_=0)).label("completed"),
+        func.sum(case((Trip.status == "assigned", 1), else_=0)).label("assigned"),
+        func.sum(case((Trip.status == "started", 1), else_=0)).label("started"),
+        func.sum(case((Trip.status == "cancelled", 1), else_=0)).label("cancelled"),
+    ).filter(Trip.driver_id == driver_id).one()
 
     return {
-        "total_trips": total_trips,
-        "completed_trips": completed_trips,
-        "assigned_trips": assigned_trips,
-        "started_trips": started_trips,
-        "cancelled_trips": cancelled_trips,
+        "total_trips": stats.total or 0,
+        "completed_trips": stats.completed or 0,
+        "assigned_trips": stats.assigned or 0,
+        "started_trips": stats.started or 0,
+        "cancelled_trips": stats.cancelled or 0,
     }
-
 
 @router.get("/{driver_id}/earnings", response_model=DriverEarningsResponse)
 def get_driver_earnings(
@@ -247,7 +267,7 @@ def get_driver_leaderboard(
 
 
 @router.patch("/{driver_id}", response_model=DriverResponse)
-def update_driver(driver_id: int, driver_update: DriverUpdate, db: Session = Depends(get_db), current_user=Depends(require_dispatcher_or_admin)):
+def update_driver(driver_id: int, driver_update: DriverUpdate, db: Session = Depends(get_db), current_user=Depends(require_roles("admin","dispatcher"))):
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -275,27 +295,53 @@ def update_driver(driver_id: int, driver_update: DriverUpdate, db: Session = Dep
         raise HTTPException(status_code=400, detail="Database integrity error")
 
 
-@router.get("/{driver_id}/trips", response_model=list[TripResponse])
+@router.get("/{driver_id}/trips", response_model=List[TripResponse])
 def get_driver_trip_history(
     driver_id: int,
-    status: Optional[str] = None,
-    created_after: Optional[datetime] = None,
-    created_before: Optional[datetime] = None,
+    status: Optional[str] = Query(None, description="Filter by trip status"),
+    created_after: Optional[datetime] = Query(None),
+    created_before: Optional[datetime] = Query(None),
+    limit: int = Query(20, le=100),
+    offset: int = Query(0),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    query = db.query(Trip).options(selectinload(Trip.driver)).filter(Trip.driver_id == driver_id)
+    
+    query = db.query(Trip).options(
+        selectinload(Trip.driver)
+    ).filter(Trip.driver_id == driver_id)
 
+    
+    valid_statuses = {"assigned", "started", "completed", "cancelled"}
     if status:
+        if status not in valid_statuses:
+            raise HTTPException(status_code=400, detail="Invalid status filter")
         query = query.filter(Trip.status == status)
-    if created_after:
+
+    
+    if created_after and created_before:
+        query = query.filter(
+            and_(
+                Trip.created_at >= created_after,
+                Trip.created_at <= created_before
+            )
+        )
+    elif created_after:
         query = query.filter(Trip.created_at >= created_after)
-    if created_before:
+    elif created_before:
         query = query.filter(Trip.created_at <= created_before)
 
-    trips = query.order_by(Trip.created_at.desc()).all()
+
+    trips = (
+        query.order_by(Trip.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
     return trips

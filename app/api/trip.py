@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy import func, or_, and_
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_user, require_dispatcher_or_admin, require_dispatcher_driver_or_admin
+from app.api.deps import get_current_user, require_roles
 from app.db import get_db
 from app.models.driver import Driver
 from app.models.trip import Trip
@@ -26,17 +26,20 @@ router = APIRouter(prefix="/trips", tags=["Trips"])
 
 
 def calculate_estimated_fare(distance_km: float, duration_minutes: Optional[int] = None) -> float:
-    base_fare = 3.0
-    per_km = 1.5
-    per_minute = 0.25
+    base_fare = 40.0          # ₹40 base fare
+    per_km = 12.0             # ₹12 per km
+    per_minute = 1.5          # ₹1.5 per minute
+
     estimated_fare = base_fare + distance_km * per_km
+
     if duration_minutes is not None:
         estimated_fare += duration_minutes * per_minute
+
     return round(estimated_fare, 2)
 
 
 @router.post("/", response_model=TripResponse)
-def create_trip(trip: TripCreate, db: Session = Depends(get_db), current_user=Depends(require_dispatcher_or_admin)):
+def create_trip(trip: TripCreate, db: Session = Depends(get_db), current_user=Depends(require_roles('admin','dispatcher'))):
     trip_data = trip.dict()
     if trip.scheduled_date is not None:
         scheduled = trip.scheduled_date
@@ -68,19 +71,15 @@ def create_trip(trip: TripCreate, db: Session = Depends(get_db), current_user=De
 def estimate_trip_fare(
     fare_request: TripFareEstimateRequest,
     current_user=Depends(get_current_user),
-):
+):   
+    base_fare=40.0
     if fare_request.distance_km <= 0:
         raise HTTPException(status_code=422, detail="distance_km must be greater than 0")
 
-    base_fare = 3.0
-    per_km = 1.5
-    per_minute = 0.25
-    estimated_fare = base_fare + fare_request.distance_km * per_km
-    if fare_request.duration_minutes is not None:
-        estimated_fare += fare_request.duration_minutes * per_minute
+    estimated_fare=calculate_estimated_fare(fare_request.distance_km,fare_request.duration_minutes)
 
     return {
-        "base_fare": base_fare,
+        "base_fare":base_fare,
         "distance_km": fare_request.distance_km,
         "duration_minutes": fare_request.duration_minutes,
         "estimated_fare": round(estimated_fare, 2),
@@ -108,10 +107,14 @@ def list_trips(
 
     query = db.query(Trip).options(selectinload(Trip.driver))
 
+    
+    if current_user.role == "driver":
+        query = query.filter(Trip.driver_id == current_user.driver_profile.id)
+
     if status:
         query = query.filter(Trip.status == status)
 
-    if driver_id is not None:
+    if driver_id is not None and current_user.role != "driver":
         query = query.filter(Trip.driver_id == driver_id)
 
     if q:
@@ -134,12 +137,8 @@ def list_trips(
         query = query.filter(Trip.created_at <= created_before)
 
     if scheduled_on:
-        # Show trips explicitly scheduled on that date OR regular trips
-        # that recur daily starting from their scheduled_date, but exclude
-        # regular recurrences on Sundays (weekday() == 6).
         weekday = scheduled_on.weekday()
         if weekday == 6:
-            # Sunday: only explicit scheduled trips
             query = query.filter(func.date(Trip.scheduled_date) == scheduled_on.isoformat())
         else:
             query = query.filter(
@@ -162,7 +161,9 @@ def get_trip_stats(
     created_before: Optional[datetime] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
-):
+):  
+    if current_user.role == "driver":
+        query = query.filter(Trip.driver_id == current_user.driver_profile.id)
     filters = []
     if created_after:
         filters.append(Trip.created_at >= created_after)
@@ -208,7 +209,7 @@ def update_trip(
     trip_id: int,
     trip_update: TripUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     if not trip:
@@ -247,7 +248,7 @@ def assign_driver(
     trip_id: int,
     data: AssignDriver,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     driver = db.query(Driver).filter(Driver.id == data.driver_id).first()
@@ -276,7 +277,7 @@ def reassign_driver(
     trip_id: int,
     data: AssignDriver,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     if not trip:
@@ -310,7 +311,7 @@ def reassign_driver(
 def start_trip(
     trip_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_driver_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
 
@@ -336,7 +337,7 @@ def start_trip(
 def complete_trip(
     trip_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_driver_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
 
@@ -368,7 +369,7 @@ def update_trip_summary(
     trip_id: int,
     summary: TripSummaryCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     if not trip:
@@ -404,7 +405,13 @@ def get_trip_summary(trip_id: int, db: Session = Depends(get_db), current_user=D
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
-
+    if current_user.role == "driver":
+        if not trip.driver or trip.driver.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to view this trip summary",
+            )
+          
     if trip.distance_km is None or trip.estimated_fare is None:
         raise HTTPException(status_code=404, detail="Trip summary not found")
 
@@ -422,7 +429,7 @@ def cancel_trip(
     trip_id: int,
     cancel_data: Optional[TripCancelRequest] = Body(default=None),
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
 
@@ -448,7 +455,7 @@ def cancel_trip(
 def discard_trip(
     trip_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_dispatcher_or_admin),
+    current_user=Depends(require_roles('admin','dispatcher')),
 ):
     trip = db.query(Trip).filter(Trip.id == trip_id).first()
 
