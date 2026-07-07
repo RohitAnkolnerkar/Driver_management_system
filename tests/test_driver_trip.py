@@ -195,6 +195,53 @@ def test_create_trip_with_company_fields(client):
     assert trip["time_taken_minutes"] == 30
 
 
+def test_trip_priority_is_created_and_updated(client):
+    create_user(client)
+    token = get_token(client)
+
+    create_response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B", "priority": "high"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create_response.status_code == 200
+    trip = create_response.json()
+    assert trip["priority"] == "high"
+
+    update_response = client.patch(
+        f"/trips/{trip['id']}",
+        json={"priority": "urgent"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["priority"] == "urgent"
+
+
+def test_dispatch_board_returns_pending_trips_and_available_drivers(client):
+    create_user(client)
+    token = get_token(client)
+
+    create_driver(client, token, name="Asha", phone="1111111111")
+
+    response = client.post(
+        "/trips/",
+        json={"source": "A", "destination": "B", "priority": "urgent"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+    board_response = client.get(
+        "/trips/dispatch/board",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert board_response.status_code == 200
+    board = board_response.json()
+    assert len(board["pending_trips"]) >= 1
+    assert board["pending_trips"][0]["priority"] == "urgent"
+    assert len(board["available_drivers"]) >= 1
+    assert board["available_drivers"][0]["status"] == "available"
+
+
 def test_list_trips_by_source_company_and_date(client):
     create_user(client)
     token = get_token(client)

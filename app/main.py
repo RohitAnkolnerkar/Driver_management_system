@@ -38,3 +38,13 @@ def dashboard():
 @app.get("/legacy-dashboard")
 def legacy_dashboard():
     return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": settings.APP_NAME}
+
+
+@app.get("/ready")
+def readiness_check():
+    return {"status": "ready", "service": settings.APP_NAME}

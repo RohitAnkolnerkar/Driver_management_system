@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
@@ -16,6 +16,7 @@ from app.schemas.trip import (
     BulkTripAssignmentResponse,
     BulkTripCancelRequest,
     BulkTripCancelResponse,
+    DispatchBoardResponse,
     TripCancelRequest,
     TripCreate,
     TripFareEstimateRequest,
@@ -196,6 +197,85 @@ def list_trips(
     return query.offset(offset).limit(limit).all()
 
 
+@router.get("/dispatch/queue", response_model=list[TripResponse])
+def get_dispatch_queue(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+
+    pending_statuses = {"created", "assigned"}
+
+    priority_rank = case(
+        (Trip.priority == "urgent", 0),
+        (Trip.priority == "high", 1),
+        (Trip.priority == "normal", 2),
+        (Trip.priority == "low", 3),
+        else_=99,
+    )
+
+    trips = (
+        db.query(Trip)
+        .options(selectinload(Trip.driver))
+        .filter(Trip.status.in_(pending_statuses))
+        .order_by(
+            priority_rank, Trip.scheduled_date.asc().nullslast(), Trip.created_at.asc()
+        )
+        .limit(limit)
+        .all()
+    )
+    return trips
+
+
+@router.get("/dispatch/board", response_model=DispatchBoardResponse)
+def get_dispatch_board(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+
+    pending_statuses = {"created", "assigned"}
+    priority_rank = case(
+        (Trip.priority == "urgent", 0),
+        (Trip.priority == "high", 1),
+        (Trip.priority == "normal", 2),
+        (Trip.priority == "low", 3),
+        else_=99,
+    )
+
+    pending_trips = (
+        db.query(Trip)
+        .options(selectinload(Trip.driver))
+        .filter(Trip.status.in_(pending_statuses))
+        .order_by(
+            priority_rank, Trip.scheduled_date.asc().nullslast(), Trip.created_at.asc()
+        )
+        .limit(limit)
+        .all()
+    )
+
+    available_drivers = (
+        db.query(Driver)
+        .filter(Driver.status == "available")
+        .order_by(Driver.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "pending_trips": pending_trips,
+        "available_drivers": available_drivers,
+    }
+
+
 @router.get("/stats", response_model=TripStatsResponse)
 def get_trip_stats(
     created_after: Optional[datetime] = None,
@@ -292,6 +372,8 @@ def update_trip(
                 status_code=422, detail="duration_minutes must be non-negative"
             )
         trip.duration_minutes = trip_update.duration_minutes
+    if trip_update.priority is not None:
+        trip.priority = trip_update.priority
 
     if trip.distance_km is not None:
         trip.estimated_fare = calculate_estimated_fare(

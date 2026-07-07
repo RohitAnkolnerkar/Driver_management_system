@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.driver import DriverResponse
+
 
 class TripCreate(BaseModel):
     source: str
@@ -13,6 +15,7 @@ class TripCreate(BaseModel):
     duration_minutes: Optional[int] = None
     is_regular: bool = False
     scheduled_date: Optional[datetime] = None
+    priority: str = "normal"
 
 
 class AssignDriver(BaseModel):
@@ -47,6 +50,7 @@ class TripUpdate(BaseModel):
     destination_company: Optional[str] = None
     distance_km: Optional[float] = None
     duration_minutes: Optional[int] = None
+    priority: Optional[str] = None
 
 
 class TripCancelRequest(BaseModel):
@@ -75,6 +79,7 @@ class TripResponse(BaseModel):
     time_taken_minutes: Optional[int] = None
     is_regular: bool = False
     scheduled_date: Optional[datetime] = None
+    priority: str = "normal"
     cancel_reason: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -99,6 +104,13 @@ class TripHistoryResponse(BaseModel):
     status: str
     changed_at: datetime
     note: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DispatchBoardResponse(BaseModel):
+    pending_trips: list[TripResponse]
+    available_drivers: list[DriverResponse]
 
     model_config = ConfigDict(from_attributes=True)
 

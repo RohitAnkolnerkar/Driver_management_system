@@ -23,6 +23,7 @@ class Trip(Base):
     destination_company = Column(String, nullable=True)
     is_regular = Column(Boolean, nullable=False, default=False)
     scheduled_date = Column(DateTime, nullable=True)
+    priority = Column(String, nullable=False, default="normal")
 
     status = Column(
         String, default="created"
