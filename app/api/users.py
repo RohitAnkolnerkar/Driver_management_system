@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user
+from app.core.security import hash_password
 from app.db import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse
-from app.core.security import hash_password
-from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -25,7 +26,9 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         return db_user
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=400, detail="Username or email already registered")
+        raise HTTPException(
+            status_code=400, detail="Username or email already registered"
+        )
 
 
 @router.get("/me", response_model=UserResponse)

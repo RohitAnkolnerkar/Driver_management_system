@@ -1,7 +1,9 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
-from app.db import Base
 import datetime
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
+
+from app.db import Base
 
 
 class Driver(Base):
@@ -39,4 +41,3 @@ class DriverAvailabilityHistory(Base):
     note = Column(String, nullable=True)
 
     driver = relationship("Driver", back_populates="availability_history")
-    

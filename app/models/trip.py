@@ -1,7 +1,10 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Float, Boolean
-from sqlalchemy.orm import relationship
-from app.db import Base
 import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy.orm import relationship
+
+from app.db import Base
+
 
 class Trip(Base):
     __tablename__ = "trips"
@@ -21,7 +24,9 @@ class Trip(Base):
     is_regular = Column(Boolean, nullable=False, default=False)
     scheduled_date = Column(DateTime, nullable=True)
 
-    status = Column(String, default="created")  # created, assigned, started, completed, cancelled
+    status = Column(
+        String, default="created"
+    )  # created, assigned, started, completed, cancelled
 
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)

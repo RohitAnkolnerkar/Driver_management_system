@@ -1,0 +1,39 @@
+#!/usr/bin/env python
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+repo_root = Path(__file__).resolve().parent.parent
+os.chdir(repo_root)
+
+candidate_paths = [
+    Path(repo_root / ".venv" / "Scripts" / "python.exe"),
+    Path(repo_root / "venv" / "Scripts" / "python.exe"),
+    Path(repo_root / ".venv" / "bin" / "python"),
+    Path(repo_root / "venv" / "bin" / "python"),
+]
+
+python_exe = None
+for path in candidate_paths:
+    if path.exists():
+        python_exe = str(path)
+        break
+
+if python_exe is None:
+    python_exe = sys.executable
+
+checks = [
+    ("Checking formatting with black", [python_exe, "-m", "black", "--check", "app", "tests"]),
+    ("Checking import order with isort", [python_exe, "-m", "isort", "--check-only", "app", "tests", "alembic"]),
+    ("Checking style with flake8", [python_exe, "-m", "flake8", "app", "tests"]),
+    ("Checking types with mypy", [python_exe, "-m", "mypy", "app"]),
+]
+
+for label, command in checks:
+    print(f"\n==> {label}")
+    result = subprocess.run(command, cwd=repo_root)
+    if result.returncode != 0:
+        sys.exit(result.returncode)
+
+print("\nAll local lint checks passed.")

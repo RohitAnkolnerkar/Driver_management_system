@@ -3,10 +3,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
-from app.config import settings
-from app.db import Base, engine
-from app.api import driver, trip, auth, users
 
+from app.api import auth, driver, trip, users
+from app.config import settings
 
 app = FastAPI()
 SITE_HTML = Path(__file__).resolve().parent / "templates" / "site.html"
@@ -24,6 +23,7 @@ app.include_router(driver.router)
 app.include_router(trip.router)
 app.include_router(auth.router)
 app.include_router(users.router)
+
 
 @app.get("/")
 def root():

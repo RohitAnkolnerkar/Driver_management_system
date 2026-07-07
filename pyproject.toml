@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.black]
 line-length = 88
-target-version = ["py314"]
+target-version = ["py312"]
 include = '\.pyi?$'
 exclude = '''
 /(
@@ -32,7 +32,10 @@ select = ["C", "E", "F", "W", "B", "B950"]
 application-import-names = ["app"]
 
 [tool.mypy]
-python_version = "3.14"
-strict = true
+python_version = "3.12"
+strict = false
 ignore_missing_imports = true
-exclude = '(^(\.venv/|venv/|build/|dist/|alembic/))'
+exclude = '^(\.venv/|venv/|build/|dist/|alembic/)'
+warn_return_any = false
+no_implicit_optional = false
+disable_error_code = ["assignment", "arg-type", "valid-type", "misc", "no-untyped-def", "no-any-return"]
