@@ -14,6 +14,10 @@ class Trip(Base):
 
     source = Column(String, nullable=False)
     destination = Column(String, nullable=False)
+    source_latitude = Column(Float, nullable=True)
+    source_longitude = Column(Float, nullable=True)
+    destination_latitude = Column(Float, nullable=True)
+    destination_longitude = Column(Float, nullable=True)
 
     distance_km = Column(Float, nullable=True)
     duration_minutes = Column(Integer, nullable=True)

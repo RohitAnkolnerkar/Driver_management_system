@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -17,6 +17,11 @@ class Driver(Base):
     license_expiry = Column(DateTime)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    current_latitude = Column(Float, nullable=True)
+    current_longitude = Column(Float, nullable=True)
+    last_location_update = Column(DateTime, nullable=True)
+
     user = relationship(
         "User",
         back_populates="driver_profile",
@@ -41,3 +46,17 @@ class DriverAvailabilityHistory(Base):
     note = Column(String, nullable=True)
 
     driver = relationship("Driver", back_populates="availability_history")
+
+
+class DriverLocationHistory(Base):
+    __tablename__ = "driver_location_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    recorded_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    driver = relationship("Driver", backref="location_history")
+    trip = relationship("Trip", backref="location_history")

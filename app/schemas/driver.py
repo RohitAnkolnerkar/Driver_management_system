@@ -17,6 +17,9 @@ class DriverCreate(BaseModel):
     license_number: str
     license_expiry: datetime
     user_id: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    email: Optional[str] = None
 
 
 class DriverStatusUpdate(BaseModel):
@@ -29,6 +32,12 @@ class DriverUpdate(BaseModel):
     status: Optional[DriverStatus] = None
     license_number: Optional[str] = None
     license_expiry: Optional[datetime] = None
+    note: Optional[str] = None
+
+
+class DriverLocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
 
 
 class DriverResponse(BaseModel):
@@ -40,8 +49,16 @@ class DriverResponse(BaseModel):
     license_expiry: Optional[datetime] = None
     user_id: Optional[int] = None
     created_at: Optional[datetime] = None
+    current_latitude: Optional[float] = None
+    current_longitude: Optional[float] = None
+    last_location_update: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DriverCreateResponse(DriverResponse):
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 
 class DriverSummaryResponse(BaseModel):

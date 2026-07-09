@@ -43,7 +43,7 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_trip_history_id'), 'trip_history', ['id'], unique=False)
     op.create_index(op.f('ix_trip_history_trip_id'), 'trip_history', ['trip_id'], unique=False)
-    op.add_column('trips', sa.Column('priority', sa.String(), nullable=False))
+    op.add_column('trips', sa.Column('priority', sa.String(), nullable=False, server_default='normal'))
     # ### end Alembic commands ###
 
 

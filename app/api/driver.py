@@ -8,16 +8,18 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
 from app.db import get_db
-from app.models.driver import Driver, DriverAvailabilityHistory
-from app.models.trip import Trip
+from app.models.driver import Driver, DriverAvailabilityHistory, DriverLocationHistory
+from app.models.trip import Trip, TripHistory
 from app.schemas.driver import (
     DispatcherWorkloadSummaryResponse,
     DriverAvailabilityAnalyticsResponse,
     DriverAvailabilityHistoryResponse,
     DriverCreate,
+    DriverCreateResponse,
     DriverDailyAvailabilityAnalyticsResponse,
     DriverEarningsResponse,
     DriverLeaderboardResponse,
+    DriverLocationUpdate,
     DriverPerformanceResponse,
     DriverResponse,
     DriverStatus,
@@ -38,13 +40,138 @@ def record_driver_status_change(
     return history_entry
 
 
-@router.post("/", response_model=DriverResponse)
+@router.post("/location", response_model=DriverResponse)
+def update_driver_location(
+    location_update: DriverLocationUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    import math
+
+    driver = db.query(Driver).filter(Driver.user_id == current_user.id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    driver.current_latitude = location_update.latitude
+    driver.current_longitude = location_update.longitude
+    driver.last_location_update = datetime.utcnow()
+
+    # Log to location history
+    history_entry = DriverLocationHistory(
+        driver_id=driver.id,
+        latitude=location_update.latitude,
+        longitude=location_update.longitude,
+        recorded_at=datetime.utcnow(),
+    )
+    db.add(history_entry)
+
+    # Check for active trip
+    active_trip = (
+        db.query(Trip)
+        .filter(Trip.driver_id == driver.id, Trip.status == "started")
+        .first()
+    )
+
+    if active_trip:
+        history_entry.trip_id = active_trip.id
+
+        # Geofencing completion check
+        dest_lat = active_trip.destination_latitude
+        dest_lng = active_trip.destination_longitude
+        if dest_lat is not None and dest_lng is not None:
+            # Haversine distance
+            lat1 = math.radians(location_update.latitude)
+            lon1 = math.radians(location_update.longitude)
+            lat2 = math.radians(dest_lat)
+            lon2 = math.radians(dest_lng)
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            dist = 6371.0 * c  # distance in km
+
+            # If driver is within 100 meters (0.1 km) of destination, auto-complete trip
+            if dist < 0.1:
+                active_trip.status = "completed"
+                active_trip.end_time = datetime.utcnow()
+                driver.status = "available"
+
+                # Create availability history entry
+                status_history = DriverAvailabilityHistory(
+                    driver_id=driver.id,
+                    status="available",
+                    note="Auto-changed to available due to trip completion.",
+                )
+                db.add(status_history)
+
+                # Create trip history entry
+                trip_history = TripHistory(
+                    trip_id=active_trip.id,
+                    status="completed",
+                    note="Auto-completed via GPS Geofence arrival.",
+                )
+                db.add(trip_history)
+
+    db.commit()
+    db.refresh(driver)
+    return driver
+
+
+@router.post("/", response_model=DriverCreateResponse)
 def create_driver(
     driver: DriverCreate,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
-    db_driver = Driver(**driver.dict())
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    user_id = driver.user_id
+
+    # If credentials are provided, create corresponding user first
+    if driver.username and driver.password:
+        existing_user = db.query(User).filter(User.username == driver.username).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=400, detail="Username is already registered"
+            )
+
+        email = driver.email or f"{driver.username}@example.com"
+        existing_email = db.query(User).filter(User.email == email).first()
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email is already registered")
+
+        db_user = User(
+            username=driver.username,
+            email=email,
+            hashed_password=hash_password(driver.password),
+            role="driver",
+            is_active=True,
+        )
+        db.add(db_user)
+        try:
+            db.flush()
+            user_id = db_user.id
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=400, detail="Username or email already registered"
+            )
+
+    driver_data = {
+        "name": driver.name,
+        "phone": driver.phone,
+        "license_number": driver.license_number,
+        "license_expiry": driver.license_expiry,
+        "user_id": user_id,
+    }
+
+    db_driver = Driver(**driver_data)
     db.add(db_driver)
     try:
         db.flush()
@@ -53,7 +180,22 @@ def create_driver(
         )
         db.commit()
         db.refresh(db_driver)
-        return db_driver
+        return {
+            "id": db_driver.id,
+            "name": db_driver.name,
+            "phone": db_driver.phone,
+            "status": db_driver.status,
+            "license_number": db_driver.license_number,
+            "license_expiry": db_driver.license_expiry,
+            "user_id": db_driver.user_id,
+            "created_at": db_driver.created_at,
+            "username": (
+                driver.username if (driver.username and driver.password) else None
+            ),
+            "password": (
+                driver.password if (driver.username and driver.password) else None
+            ),
+        }
     except IntegrityError as e:
         db.rollback()
         err = str(e.orig).lower() if getattr(e, "orig", None) else str(e).lower()
@@ -141,6 +283,144 @@ def get_dashboard_summary(
         "cancelled_trips": cancelled_trips,
         "total_trips_today": total_trips_today,
     }
+
+
+@router.get("/leaderboard", response_model=list[DriverLeaderboardResponse])
+def get_driver_leaderboard(
+    completed_after: Optional[datetime] = None,
+    completed_before: Optional[datetime] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = (
+        db.query(
+            Driver.id.label("driver_id"),
+            Driver.name,
+            Driver.phone,
+            func.count(Trip.id).label("completed_trips"),
+            func.coalesce(func.sum(Trip.estimated_fare), 0.0).label("total_earnings"),
+            func.coalesce(func.avg(Trip.estimated_fare), 0.0).label("average_fare"),
+        )
+        .join(Trip, Trip.driver_id == Driver.id)
+        .filter(Trip.status == "completed")
+    )
+
+    if completed_after:
+        query = query.filter(Trip.end_time >= completed_after)
+    if completed_before:
+        query = query.filter(Trip.end_time <= completed_before)
+
+    query = query.group_by(Driver.id).order_by(
+        func.coalesce(func.sum(Trip.estimated_fare), 0.0).desc()
+    )
+    rows = query.all()
+    return [
+        {
+            "driver_id": row.driver_id,
+            "name": row.name,
+            "phone": row.phone,
+            "completed_trips": int(row.completed_trips),
+            "total_earnings": float(row.total_earnings),
+            "average_fare": round(float(row.average_fare), 2),
+        }
+        for row in rows
+    ]
+
+
+@router.get(
+    "/dashboard/workload-summary",
+    response_model=DispatcherWorkloadSummaryResponse,
+)
+def get_dispatcher_workload_summary(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    today = datetime.utcnow().date()
+
+    # Driver statistics (1 query)
+    driver_stats = db.query(
+        func.count(Driver.id).label("total_drivers"),
+        func.sum(case((Driver.status == "available", 1), else_=0)).label(
+            "available_drivers"
+        ),
+        func.sum(case((Driver.status == "on_trip", 1), else_=0)).label(
+            "on_trip_drivers"
+        ),
+        func.sum(case((Driver.status == "inactive", 1), else_=0)).label(
+            "inactive_drivers"
+        ),
+    ).one()
+
+    # Trip statistics (1 query)
+    trip_stats = db.query(
+        func.sum(case((Trip.status == "assigned", 1), else_=0)).label("assigned_trips"),
+        func.sum(case((Trip.status == "started", 1), else_=0)).label("started_trips"),
+        func.sum(case((Trip.status == "completed", 1), else_=0)).label(
+            "completed_trips"
+        ),
+        func.sum(case((Trip.status == "cancelled", 1), else_=0)).label(
+            "cancelled_trips"
+        ),
+        func.sum(case((Trip.status.in_(["created", "assigned"]), 1), else_=0)).label(
+            "pending_trips"
+        ),
+        func.sum(case((func.date(Trip.created_at) == today, 1), else_=0)).label(
+            "total_trips_today"
+        ),
+    ).one()
+
+    assigned_trips = trip_stats.assigned_trips or 0
+    started_trips = trip_stats.started_trips or 0
+
+    return {
+        "total_drivers": driver_stats.total_drivers or 0,
+        "available_drivers": driver_stats.available_drivers or 0,
+        "on_trip_drivers": driver_stats.on_trip_drivers or 0,
+        "inactive_drivers": driver_stats.inactive_drivers or 0,
+        "active_trips": assigned_trips + started_trips,
+        "assigned_trips": assigned_trips,
+        "started_trips": started_trips,
+        "completed_trips": trip_stats.completed_trips or 0,
+        "cancelled_trips": trip_stats.cancelled_trips or 0,
+        "pending_trips": trip_stats.pending_trips or 0,
+        "total_trips_today": trip_stats.total_trips_today or 0,
+    }
+
+
+@router.get("/alerts/expired", response_model=list[DriverResponse])
+def get_expired_or_expiring_drivers(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    from datetime import timedelta
+
+    thirty_days_later = datetime.utcnow() + timedelta(days=30)
+
+    drivers = (
+        db.query(Driver)
+        .filter(
+            Driver.license_expiry.isnot(None),
+            Driver.license_expiry <= thirty_days_later,
+        )
+        .order_by(Driver.license_expiry.asc())
+        .all()
+    )
+    return drivers
+
+
+@router.get("/profile/me", response_model=DriverResponse)
+def get_my_driver_profile(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "driver":
+        raise HTTPException(status_code=400, detail="User is not a driver")
+
+    driver = db.query(Driver).filter(Driver.user_id == current_user.id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    return driver
 
 
 @router.get("/{driver_id}", response_model=DriverResponse)
@@ -298,48 +578,6 @@ def get_driver_earnings(
     }
 
 
-@router.get("/leaderboard", response_model=list[DriverLeaderboardResponse])
-def get_driver_leaderboard(
-    completed_after: Optional[datetime] = None,
-    completed_before: Optional[datetime] = None,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    query = (
-        db.query(
-            Driver.id.label("driver_id"),
-            Driver.name,
-            Driver.phone,
-            func.count(Trip.id).label("completed_trips"),
-            func.coalesce(func.sum(Trip.estimated_fare), 0.0).label("total_earnings"),
-            func.coalesce(func.avg(Trip.estimated_fare), 0.0).label("average_fare"),
-        )
-        .join(Trip, Trip.driver_id == Driver.id)
-        .filter(Trip.status == "completed")
-    )
-
-    if completed_after:
-        query = query.filter(Trip.end_time >= completed_after)
-    if completed_before:
-        query = query.filter(Trip.end_time <= completed_before)
-
-    query = query.group_by(Driver.id).order_by(
-        func.coalesce(func.sum(Trip.estimated_fare), 0.0).desc()
-    )
-    rows = query.all()
-    return [
-        {
-            "driver_id": row.driver_id,
-            "name": row.name,
-            "phone": row.phone,
-            "completed_trips": int(row.completed_trips),
-            "total_earnings": float(row.total_earnings),
-            "average_fare": round(float(row.average_fare), 2),
-        }
-        for row in rows
-    ]
-
-
 @router.patch("/{driver_id}", response_model=DriverResponse)
 def update_driver(
     driver_id: int,
@@ -357,7 +595,8 @@ def update_driver(
         driver.phone = driver_update.phone
     if driver_update.status is not None:
         driver.status = driver_update.status.value
-        record_driver_status_change(db, driver.id, driver.status, "status updated")
+        note = driver_update.note if driver_update.note else "status updated"
+        record_driver_status_change(db, driver.id, driver.status, note)
     if driver_update.license_number is not None:
         driver.license_number = driver_update.license_number
     if driver_update.license_expiry is not None:
@@ -377,64 +616,28 @@ def update_driver(
         raise HTTPException(status_code=400, detail="Database integrity error")
 
 
-@router.get(
-    "/dashboard/workload-summary",
-    response_model=DispatcherWorkloadSummaryResponse,
-)
-def get_dispatcher_workload_summary(
+@router.delete("/{driver_id}")
+def delete_driver(
+    driver_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles("admin", "dispatcher")),
+    current_user=Depends(require_roles("admin")),
 ):
-    today = datetime.utcnow().date()
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
 
-    # Driver statistics (1 query)
-    driver_stats = db.query(
-        func.count(Driver.id).label("total_drivers"),
-        func.sum(case((Driver.status == "available", 1), else_=0)).label(
-            "available_drivers"
-        ),
-        func.sum(case((Driver.status == "on_trip", 1), else_=0)).label(
-            "on_trip_drivers"
-        ),
-        func.sum(case((Driver.status == "inactive", 1), else_=0)).label(
-            "inactive_drivers"
-        ),
-    ).one()
+    if driver.status == "on_trip":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete a driver who is currently on a trip",
+        )
 
-    # Trip statistics (1 query)
-    trip_stats = db.query(
-        func.sum(case((Trip.status == "assigned", 1), else_=0)).label("assigned_trips"),
-        func.sum(case((Trip.status == "started", 1), else_=0)).label("started_trips"),
-        func.sum(case((Trip.status == "completed", 1), else_=0)).label(
-            "completed_trips"
-        ),
-        func.sum(case((Trip.status == "cancelled", 1), else_=0)).label(
-            "cancelled_trips"
-        ),
-        func.sum(case((Trip.status.in_(["created", "assigned"]), 1), else_=0)).label(
-            "pending_trips"
-        ),
-        func.sum(case((func.date(Trip.created_at) == today, 1), else_=0)).label(
-            "total_trips_today"
-        ),
-    ).one()
+    db.query(Trip).filter(Trip.driver_id == driver.id).update({Trip.driver_id: None})
 
-    assigned_trips = trip_stats.assigned_trips or 0
-    started_trips = trip_stats.started_trips or 0
+    db.delete(driver)
+    db.commit()
 
-    return {
-        "total_drivers": driver_stats.total_drivers or 0,
-        "available_drivers": driver_stats.available_drivers or 0,
-        "on_trip_drivers": driver_stats.on_trip_drivers or 0,
-        "inactive_drivers": driver_stats.inactive_drivers or 0,
-        "active_trips": assigned_trips + started_trips,
-        "assigned_trips": assigned_trips,
-        "started_trips": started_trips,
-        "completed_trips": trip_stats.completed_trips or 0,
-        "cancelled_trips": trip_stats.cancelled_trips or 0,
-        "pending_trips": trip_stats.pending_trips or 0,
-        "total_trips_today": trip_stats.total_trips_today or 0,
-    }
+    return {"message": "Driver deleted successfully"}
 
 
 @router.get(

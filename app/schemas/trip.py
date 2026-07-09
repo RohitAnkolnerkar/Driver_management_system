@@ -13,9 +13,14 @@ class TripCreate(BaseModel):
     destination_company: Optional[str] = None
     distance_km: Optional[float] = None
     duration_minutes: Optional[int] = None
+    estimated_fare: Optional[float] = None
     is_regular: bool = False
     scheduled_date: Optional[datetime] = None
     priority: str = "normal"
+    source_latitude: Optional[float] = None
+    source_longitude: Optional[float] = None
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
 
 
 class AssignDriver(BaseModel):
@@ -50,7 +55,12 @@ class TripUpdate(BaseModel):
     destination_company: Optional[str] = None
     distance_km: Optional[float] = None
     duration_minutes: Optional[int] = None
+    estimated_fare: Optional[float] = None
     priority: Optional[str] = None
+    source_latitude: Optional[float] = None
+    source_longitude: Optional[float] = None
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
 
 
 class TripCancelRequest(BaseModel):
@@ -84,6 +94,10 @@ class TripResponse(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    source_latitude: Optional[float] = None
+    source_longitude: Optional[float] = None
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,3 +156,7 @@ class TripFareEstimateResponse(BaseModel):
     estimated_fare_currency: str = "INR"
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TripTransitionRequest(BaseModel):
+    note: Optional[str] = None

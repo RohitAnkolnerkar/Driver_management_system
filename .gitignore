@@ -70,3 +70,5 @@ app.db
 
 instance/
 Pipfile.lock
+*.bak
+*.tmp

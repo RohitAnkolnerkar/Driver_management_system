@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, EmailStr, constr
 
 
@@ -16,3 +18,9 @@ class UserResponse(BaseModel):
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[constr(min_length=8, max_length=72)] = None
