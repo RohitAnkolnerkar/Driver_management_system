@@ -105,6 +105,10 @@ export default function App() {
   const [editingDriverStatus, setEditingDriverStatus] = useState<number | null>(null);
   const [driverNewStatus, setDriverNewStatus] = useState('available');
   const [driverStatusNote, setDriverStatusNote] = useState('');
+  const [editDriverName, setEditDriverName] = useState('');
+  const [editDriverPhone, setEditDriverPhone] = useState('');
+  const [editDriverLicense, setEditDriverLicense] = useState('');
+  const [editDriverExpiry, setEditDriverExpiry] = useState('');
 
   const [profileUpdates, setProfileUpdates] = useState({
     username: '',
@@ -518,7 +522,7 @@ export default function App() {
     }
   };
 
-  // Business Action: Update Driver status (with custom notes parameter)
+  // Business Action: Update Driver Profile & Status (with custom notes parameter)
   const handleDriverStatusSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingDriverStatus) return;
@@ -526,13 +530,21 @@ export default function App() {
       await apiFetch(`/drivers/${editingDriverStatus}`, {
         method: 'PATCH',
         body: JSON.stringify({
+          name: editDriverName,
+          phone: editDriverPhone,
+          license_number: editDriverLicense,
+          license_expiry: editDriverExpiry ? new Date(editDriverExpiry).toISOString() : null,
           status: driverNewStatus,
           note: driverStatusNote || undefined
         })
       });
-      showSuccess("Driver status updated successfully!");
+      showSuccess("Driver profile updated successfully!");
       setEditingDriverStatus(null);
       setDriverStatusNote('');
+      setEditDriverName('');
+      setEditDriverPhone('');
+      setEditDriverLicense('');
+      setEditDriverExpiry('');
       loadData();
     } catch (e: any) {
       showError(e.message);
@@ -1128,7 +1140,14 @@ export default function App() {
                           </td>
                           <td>
                             <div style={{ display: 'flex', gap: '8px' }}>
-                              <button onClick={() => { setEditingDriverStatus(driver.id); setDriverNewStatus(driver.status); }} className="btn btn-secondary btn-icon-only" title="Edit Status Notes">
+                              <button onClick={() => {
+                                setEditingDriverStatus(driver.id);
+                                setDriverNewStatus(driver.status);
+                                setEditDriverName(driver.name);
+                                setEditDriverPhone(driver.phone || '');
+                                setEditDriverLicense(driver.license_number || '');
+                                setEditDriverExpiry(driver.license_expiry ? driver.license_expiry.split('T')[0] : '');
+                              }} className="btn btn-secondary btn-icon-only" title="Edit Profile & Status">
                                 <Edit size={14} />
                               </button>
                               {currentUser.role === 'admin' && (
@@ -1847,19 +1866,64 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: DRIVER STATUS TRANSITION NOTES */}
+      {/* MODAL: EDIT DRIVER PROFILE & STATUS */}
       {editingDriverStatus !== null && (
         <div className="modal-overlay">
-          <form className="modal-content" onSubmit={handleDriverStatusSubmit}>
+          <form className="modal-content" onSubmit={handleDriverStatusSubmit} style={{ width: '480px' }}>
             <div className="modal-header">
-              <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Change Driver Status</h3>
+              <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Edit Driver Profile & Status</h3>
               <button type="button" className="modal-close" onClick={() => setEditingDriverStatus(null)}>
                 <X size={20} />
               </button>
             </div>
 
             <div className="form-group">
-              <label className="form-label">New Status</label>
+              <label className="form-label">Full Name</label>
+              <input 
+                type="text" 
+                className="form-input" 
+                value={editDriverName} 
+                onChange={e => setEditDriverName(e.target.value)} 
+                required 
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Phone Number</label>
+              <input 
+                type="text" 
+                className="form-input" 
+                value={editDriverPhone} 
+                onChange={e => setEditDriverPhone(e.target.value)} 
+                required 
+              />
+            </div>
+
+            <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div>
+                <label className="form-label">License Number</label>
+                <input 
+                  type="text" 
+                  className="form-input" 
+                  value={editDriverLicense} 
+                  onChange={e => setEditDriverLicense(e.target.value)} 
+                  required 
+                />
+              </div>
+              <div>
+                <label className="form-label">License Expiry</label>
+                <input 
+                  type="date" 
+                  className="form-input" 
+                  value={editDriverExpiry} 
+                  onChange={e => setEditDriverExpiry(e.target.value)} 
+                  required 
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Availability Status</label>
               <select 
                 className="form-select"
                 value={driverNewStatus}
@@ -1872,13 +1936,13 @@ export default function App() {
             </div>
 
             <div className="form-group" style={{ marginBottom: '28px' }}>
-              <label className="form-label">Reason / Transition Note (Optional)</label>
+              <label className="form-label">Status Change Note (Optional)</label>
               <textarea 
                 className="form-textarea" 
                 value={driverStatusNote} 
                 onChange={e => setDriverStatusNote(e.target.value)}
-                placeholder="e.g. going offline for lunch break, mechanical issues..."
-                rows={3}
+                placeholder="Reason for status change..."
+                rows={2}
               />
             </div>
 
@@ -1887,7 +1951,7 @@ export default function App() {
                 Cancel
               </button>
               <button type="submit" className="btn btn-primary">
-                Update Status
+                Save Changes
               </button>
             </div>
           </form>

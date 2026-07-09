@@ -2567,3 +2567,40 @@ def test_create_trip_invalid_location_fails(client):
     )
     assert response.status_code == 400
     assert "is invalid or could not be found" in response.json()["detail"]
+
+
+def test_update_driver_profile_fields(client):
+    create_user(client)
+    token = get_token(client)
+
+    # 1. Create a driver
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Original Name",
+            "phone": "9998887777",
+            "license_number": "LIC-ORIG",
+            "license_expiry": "2029-12-31T00:00:00",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    # 2. Update driver profile details
+    update_res = client.patch(
+        f"/drivers/{driver_res['id']}",
+        json={
+            "name": "Updated Name",
+            "phone": "9998886666",
+            "license_number": "LIC-UPDATED",
+            "license_expiry": "2030-12-31T00:00:00",
+            "status": "inactive",
+            "note": "manually updating status to inactive",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert update_res.status_code == 200
+    updated_driver = update_res.json()
+    assert updated_driver["name"] == "Updated Name"
+    assert updated_driver["phone"] == "9998886666"
+    assert updated_driver["license_number"] == "LIC-UPDATED"
+    assert updated_driver["status"] == "inactive"
