@@ -14,12 +14,14 @@ import {
   XCircle,
   Play, 
   Clipboard, 
+  Copy, 
   Clock, 
   Search,
   Filter,
   CheckCircle2,
   ListRestart,
-  Compass
+  Compass,
+  RefreshCw
 } from 'lucide-react';
 
 // API Fetch helper that includes Auth token
@@ -112,6 +114,8 @@ export default function App() {
   const [editDriverExpiry, setEditDriverExpiry] = useState('');
   const [cancellingTripId, setCancellingTripId] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const [profileUpdates, setProfileUpdates] = useState({
     username: '',
@@ -307,6 +311,16 @@ export default function App() {
       loadData();
     }
   }, [currentUser, activeTab]);
+
+  // Auto-refresh: reload data every 30 seconds when toggle is ON
+  useEffect(() => {
+    if (!autoRefresh || !currentUser) return;
+    const interval = setInterval(() => {
+      loadData();
+      setLastRefreshed(new Date());
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, currentUser]);
 
   const loadUserProfile = async () => {
     try {
@@ -572,6 +586,15 @@ export default function App() {
     } catch (e: any) {
       showError(e.message);
     }
+  };
+
+  // Business Action: Copy Trip Summary to Clipboard
+  const handleCopyTripSummary = (trip: any) => {
+    const driverText = trip.driver_name ? `Driver: ${trip.driver_name} (${trip.driver_phone})` : 'Driver: Unassigned';
+    const fareText = trip.estimated_fare ? `Fare: ₹${trip.estimated_fare}` : 'Fare: N/A';
+    const summary = `📋 Dispatch #${trip.id}: ${trip.source} ➔ ${trip.destination}\n• Status: ${trip.status.toUpperCase()}\n• ${driverText}\n• ${fareText}\n• Distance: ${trip.distance_km || 'N/A'} km | Duration: ${trip.duration_minutes || 'N/A'} mins`;
+    navigator.clipboard.writeText(summary);
+    showSuccess(`Trip #${trip.id} summary copied to clipboard!`);
   };
 
   // Business Action: Delete Driver
@@ -905,7 +928,7 @@ export default function App() {
             {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Workspace
           </h1>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {successMsg && (
               <div style={{ backgroundColor: 'rgba(69,242,72,0.1)', color: 'var(--accent-green)', border: '1px solid rgba(69,242,72,0.2)', padding: '8px 16px', borderRadius: '6px', fontSize: '12px' }}>
                 {successMsg}
@@ -916,8 +939,52 @@ export default function App() {
                 {errorMsg}
               </div>
             )}
+
+            {/* Manual refresh button */}
+            <button
+              onClick={() => { loadData(); setLastRefreshed(new Date()); }}
+              className="btn btn-secondary btn-sm"
+              title="Refresh data now"
+              style={{ padding: '6px 10px', gap: '5px' }}
+            >
+              <RefreshCw size={13} />
+              Refresh
+            </button>
+
+            {/* Auto-refresh toggle */}
+            <button
+              onClick={() => { setAutoRefresh(v => !v); if (!autoRefresh) setLastRefreshed(new Date()); }}
+              className="btn btn-sm"
+              title={autoRefresh ? 'Auto-refresh is ON (every 30s) — click to disable' : 'Enable auto-refresh (every 30s)'}
+              style={{
+                padding: '6px 10px',
+                gap: '5px',
+                backgroundColor: autoRefresh ? 'rgba(69,242,72,0.12)' : 'var(--surface-2)',
+                border: autoRefresh ? '1px solid rgba(69,242,72,0.35)' : '1px solid var(--border)',
+                color: autoRefresh ? 'var(--accent-green)' : 'var(--text-secondary)',
+                fontWeight: autoRefresh ? 600 : 400,
+                transition: 'all 0.2s',
+              }}
+            >
+              <span style={{
+                display: 'inline-block',
+                width: '7px', height: '7px',
+                borderRadius: '50%',
+                backgroundColor: autoRefresh ? 'var(--accent-green)' : 'var(--text-secondary)',
+                boxShadow: autoRefresh ? '0 0 6px var(--accent-green)' : 'none',
+                animation: autoRefresh ? 'pulse 1.5s infinite' : 'none',
+              }} />
+              {autoRefresh ? 'Live · 30s' : 'Auto-refresh'}
+            </button>
+
+            {lastRefreshed && (
+              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                Updated {lastRefreshed.toLocaleTimeString()}
+              </span>
+            )}
+
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              Role Badge: <strong style={{ color: '#fff', textTransform: 'uppercase' }}>{currentUser.role}</strong>
+              Role: <strong style={{ color: '#fff', textTransform: 'uppercase' }}>{currentUser.role}</strong>
             </span>
           </div>
         </div>
@@ -926,10 +993,35 @@ export default function App() {
         <div className="workspace-area">
 
           {/* TAB 1: DASHBOARD (ADMIN & DISPATCHER ONLY) */}
-          {activeTab === 'dashboard' && isDispatcher && (
-            <div>
-              {/* Metric Card Widgets */}
-              <div className="metrics-grid">
+          {activeTab === 'dashboard' && isDispatcher && (() => {
+            const expiredLicensesCount = drivers.filter(driver => driver.license_expiry && new Date(driver.license_expiry) < new Date()).length;
+            return (
+              <div>
+                {/* Expired License Warning Alert Banner */}
+                {expiredLicensesCount > 0 && (
+                  <div className="alert alert-warning" style={{ 
+                    backgroundColor: 'rgba(239, 68, 68, 0.08)', 
+                    border: '1px solid rgba(239, 68, 68, 0.25)', 
+                    color: 'var(--accent-red)', 
+                    padding: '12px 20px', 
+                    borderRadius: '8px', 
+                    marginBottom: '20px', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '10px' 
+                  }}>
+                    <AlertTriangle size={16} />
+                    <span style={{ fontSize: '13px', fontWeight: 500 }}>
+                      Fleet Alert: {expiredLicensesCount} driver{expiredLicensesCount > 1 ? 's have' : ' has'} an expired license! Please update their profile to enable dispatches.
+                    </span>
+                    <button onClick={() => setActiveTab('drivers')} className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: '11px', color: 'var(--accent-red)', borderColor: 'rgba(239, 68, 68, 0.2)', backgroundColor: 'transparent' }}>
+                      Manage Drivers
+                    </button>
+                  </div>
+                )}
+
+                {/* Metric Card Widgets */}
+                <div className="metrics-grid">
                 <div className="metric-card">
                   <div className="metric-label">Active Drivers</div>
                   <div className="metric-value">{dashboardStats?.total_drivers || 0}</div>
@@ -1052,7 +1144,8 @@ export default function App() {
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* TAB 2: ALERTS (ADMIN & DISPATCHER ONLY) */}
           {activeTab === 'alerts' && isDispatcher && (
@@ -1337,10 +1430,16 @@ export default function App() {
                             </div>
                           </td>
                           <td>
-                            <button onClick={() => handleViewHistory(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: '11px' }}>
-                              <Clipboard size={12} />
-                              Logs
-                            </button>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button onClick={() => handleViewHistory(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: '11px' }}>
+                                <Clipboard size={12} />
+                                Logs
+                              </button>
+                              <button onClick={() => handleCopyTripSummary(trip)} className="btn btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: '11px' }} title="Copy Dispatch Summary">
+                                <Copy size={12} />
+                                Copy
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
