@@ -2604,3 +2604,46 @@ def test_update_driver_profile_fields(client):
     assert updated_driver["phone"] == "9998886666"
     assert updated_driver["license_number"] == "LIC-UPDATED"
     assert updated_driver["status"] == "inactive"
+
+
+def test_cancel_trip_with_reason(client):
+    create_user(client)
+    token = get_token(client)
+
+    # 1. Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Mumbai Terminal",
+            "destination": "Pune Hub",
+            "distance_km": 150.0,
+            "duration_minutes": 180,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    # 2. Cancel the trip with a reason
+    cancel_res = client.patch(
+        f"/trips/{trip_res['id']}/cancel",
+        json={"reason": "Driver emergency, vehicle breakdown"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cancel_res.status_code == 200
+
+    # 3. Check that trip is marked cancelled and the cancel_reason is populated
+    trip_check = client.get(
+        f"/trips/{trip_res['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert trip_check["status"] == "cancelled"
+    assert trip_check["cancel_reason"] == "Driver emergency, vehicle breakdown"
+
+    # 4. Check the history log note
+    history_res = client.get(
+        f"/trips/{trip_res['id']}/history",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert len(history_res) > 0
+    # The last log item should contain our cancellation reason
+    cancel_log = [log for log in history_res if log["status"] == "cancelled"][0]
+    assert "Driver emergency, vehicle breakdown" in cancel_log["note"]

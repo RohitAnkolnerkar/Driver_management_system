@@ -11,6 +11,7 @@ import {
   Trash2, 
   Edit, 
   X, 
+  XCircle,
   Play, 
   Clipboard, 
   Clock, 
@@ -109,6 +110,8 @@ export default function App() {
   const [editDriverPhone, setEditDriverPhone] = useState('');
   const [editDriverLicense, setEditDriverLicense] = useState('');
   const [editDriverExpiry, setEditDriverExpiry] = useState('');
+  const [cancellingTripId, setCancellingTripId] = useState<number | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
 
   const [profileUpdates, setProfileUpdates] = useState({
     username: '',
@@ -545,6 +548,26 @@ export default function App() {
       setEditDriverPhone('');
       setEditDriverLicense('');
       setEditDriverExpiry('');
+      loadData();
+    } catch (e: any) {
+      showError(e.message);
+    }
+  };
+
+  // Business Action: Cancel Trip Dispatch
+  const handleCancelTripSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancellingTripId) return;
+    try {
+      await apiFetch(`/trips/${cancellingTripId}/cancel`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          reason: cancelReason || undefined
+        })
+      });
+      showSuccess("Trip cancelled successfully!");
+      setCancellingTripId(null);
+      setCancelReason('');
       loadData();
     } catch (e: any) {
       showError(e.message);
@@ -1305,6 +1328,12 @@ export default function App() {
                                   Complete
                                 </button>
                               )}
+                              {(trip.status === 'created' || trip.status === 'assigned') && isDispatcher && (
+                                <button onClick={() => setCancellingTripId(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '3px 8px', fontSize: '10px', color: 'var(--accent-red)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                                  <XCircle size={10} />
+                                  Cancel Trip
+                                </button>
+                              )}
                             </div>
                           </td>
                           <td>
@@ -1952,6 +1981,41 @@ export default function App() {
               </button>
               <button type="submit" className="btn btn-primary">
                 Save Changes
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: TRIP CANCELLATION REASON */}
+      {cancellingTripId !== null && (
+        <div className="modal-overlay">
+          <form className="modal-content" onSubmit={handleCancelTripSubmit} style={{ width: '480px' }}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Cancel Trip Dispatch</h3>
+              <button type="button" className="modal-close" onClick={() => { setCancellingTripId(null); setCancelReason(''); }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '24px' }}>
+              <label className="form-label">Reason for Cancellation</label>
+              <textarea 
+                className="form-textarea" 
+                value={cancelReason} 
+                onChange={e => setCancelReason(e.target.value)}
+                placeholder="Please specify why this trip is being cancelled (e.g. customer request, no driver available...)"
+                rows={3}
+                required
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => { setCancellingTripId(null); setCancelReason(''); }}>
+                Keep Trip
+              </button>
+              <button type="submit" className="btn btn-primary" style={{ backgroundColor: 'var(--accent-red)', border: 'none' }}>
+                Cancel Trip
               </button>
             </div>
           </form>

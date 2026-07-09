@@ -923,7 +923,12 @@ def cancel_trip(
 
     trip.status = "cancelled"
     trip.cancel_reason = cancel_data.reason if cancel_data else None
-    record_trip_status_change(db, trip.id, trip.status, "trip cancelled")
+    note = (
+        f"trip cancelled: {cancel_data.reason}"
+        if (cancel_data and cancel_data.reason)
+        else "trip cancelled"
+    )
+    record_trip_status_change(db, trip.id, trip.status, note)
     db.commit()
 
     return {"message": "Trip cancelled"}
