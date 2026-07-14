@@ -24,7 +24,7 @@ def create_driver(
     token,
     name="Rohit",
     phone="1234567890",
-    license_number="ABC123",
+    license_number="MH-12-2018-0004567",
     license_expiry="2026-12-31T00:00:00",
 ):
     response = client.post(
@@ -106,7 +106,7 @@ def test_protected_endpoints_require_token(client):
         json={
             "name": "Test",
             "phone": "1112223333",
-            "license_number": "ABC",
+            "license_number": "MH-12-2018-0004567",
             "license_expiry": "2026-12-31T00:00:00",
         },
     )
@@ -129,7 +129,7 @@ def test_create_driver_duplicate_phone(client):
         json={
             "name": "Duplicate",
             "phone": "5555555555",
-            "license_number": "ABC123",
+            "license_number": "MH-12-2018-0004567",
             "license_expiry": "2026-12-31T00:00:00",
         },
         headers={"Authorization": f"Bearer {token}"},
@@ -147,7 +147,7 @@ def test_create_driver_invalid_license_expiry(client):
         json={
             "name": "InvalidDate",
             "phone": "9998887777",
-            "license_number": "ABC123",
+            "license_number": "MH-12-2018-0004567",
             "license_expiry": "not-a-date",
         },
         headers={"Authorization": f"Bearer {token}"},
@@ -481,7 +481,7 @@ def test_driver_creation_denied_for_non_dispatcher_role(client, db_session):
         json={
             "name": "Test",
             "phone": "4445556666",
-            "license_number": "ABC",
+            "license_number": "MH-12-2018-0004567",
             "license_expiry": "2026-12-31T00:00:00",
         },
         headers={"Authorization": f"Bearer {token}"},
@@ -782,12 +782,15 @@ def test_update_driver_license_fields(client):
 
     response = client.patch(
         f"/drivers/{driver['id']}",
-        json={"license_number": "NEWLIC123", "license_expiry": "2027-10-01T00:00:00"},
+        json={
+            "license_number": "KA-12-2018-0004567",
+            "license_expiry": "2027-10-01T00:00:00",
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
     updated = response.json()
-    assert updated["license_number"] == "NEWLIC123"
+    assert updated["license_number"] == "KA-12-2018-0004567"
     assert updated["license_expiry"].startswith("2027-10-01")
 
 
@@ -1415,6 +1418,17 @@ def test_driver_leaderboard_orders_by_earnings(client):
     assert leaderboard[0]["average_fare"] == round((40.0 + 10 * 12.0 + 20 * 1.5), 2)
     assert leaderboard[1]["driver_id"] == second_driver["id"]
 
+    # Assert performance analytics fields
+    assert leaderboard[0]["total_distance_km"] == 10.0
+    assert leaderboard[0]["total_duration_minutes"] == 20
+    assert leaderboard[0]["average_speed_kmh"] == 30.0
+    assert leaderboard[0]["on_time_rate"] == 100.0
+
+    assert leaderboard[1]["total_distance_km"] == 5.0
+    assert leaderboard[1]["total_duration_minutes"] == 10
+    assert leaderboard[1]["average_speed_kmh"] == 30.0
+    assert leaderboard[1]["on_time_rate"] == 100.0
+
 
 def test_update_and_get_trip_summary(client):
     create_user(client)
@@ -1951,7 +1965,7 @@ def test_get_my_driver_profile_success(client):
         json={
             "name": "Linked Driver",
             "phone": "5559990000",
-            "license_number": "LIC999",
+            "license_number": "UP-12-2018-0004567",
             "license_expiry": "2030-01-01T00:00:00",
             "user_id": user_id,
         },
@@ -2254,7 +2268,7 @@ def test_get_trip_history_as_assigned_driver_success(client):
         json={
             "name": "Driver 1",
             "phone": "5558880001",
-            "license_number": "LIC001",
+            "license_number": "MP-12-2018-0004567",
             "license_expiry": "2030-01-01T00:00:00",
             "user_id": user_id,
         },
@@ -2314,7 +2328,7 @@ def test_get_trip_history_as_unassigned_driver_fails(client):
         json={
             "name": "Driver 1",
             "phone": "5558880001",
-            "license_number": "LIC001",
+            "license_number": "MP-12-2018-0004567",
             "license_expiry": "2030-01-01T00:00:00",
             "user_id": user_id_1,
         },
@@ -2431,7 +2445,7 @@ def test_create_driver_with_credentials(client):
         json={
             "name": "New Driver User",
             "phone": "9898989898",
-            "license_number": "LIC-9898",
+            "license_number": "GJ-12-2018-0004567",
             "license_expiry": "2028-12-31T00:00:00",
             "username": "new_driver_user",
             "password": "driver_secret_password",
@@ -2471,7 +2485,7 @@ def test_driver_location_tracking_and_geofencing(client):
         json={
             "name": "GPS Tracked Driver",
             "phone": "9000000001",
-            "license_number": "LIC-GPS",
+            "license_number": "HR-12-2018-0004567",
             "license_expiry": "2029-12-31T00:00:00",
             "username": "gps_driver",
             "password": "gps_password",
@@ -2535,9 +2549,19 @@ def test_driver_location_tracking_and_geofencing(client):
         headers={"Authorization": f"Bearer {driver_token}"},
     )
     assert geofence_res.status_code == 200
+    geofence_data = geofence_res.json()
+    assert geofence_data["near_destination"] is True
+    assert geofence_data["active_trip_id"] == trip_res["id"]
 
-    # 6. Verify that trip is automatically transition-completed
-    # and driver status is available
+    # 6. Manually complete the trip
+    complete_res = client.patch(
+        f"/trips/{trip_res['id']}/complete",
+        json={"note": "Geofence arrived, completing"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert complete_res.status_code == 200
+
+    # 7. Verify that trip is completed and driver status is available
     trip_finished = client.get(
         f"/trips/{trip_res['id']}",
         headers={"Authorization": f"Bearer {token}"},
@@ -2579,7 +2603,7 @@ def test_update_driver_profile_fields(client):
         json={
             "name": "Original Name",
             "phone": "9998887777",
-            "license_number": "LIC-ORIG",
+            "license_number": "AP-12-2018-0004567",
             "license_expiry": "2029-12-31T00:00:00",
         },
         headers={"Authorization": f"Bearer {token}"},
@@ -2591,7 +2615,7 @@ def test_update_driver_profile_fields(client):
         json={
             "name": "Updated Name",
             "phone": "9998886666",
-            "license_number": "LIC-UPDATED",
+            "license_number": "TS-12-2018-0004567",
             "license_expiry": "2030-12-31T00:00:00",
             "status": "inactive",
             "note": "manually updating status to inactive",
@@ -2602,7 +2626,7 @@ def test_update_driver_profile_fields(client):
     updated_driver = update_res.json()
     assert updated_driver["name"] == "Updated Name"
     assert updated_driver["phone"] == "9998886666"
-    assert updated_driver["license_number"] == "LIC-UPDATED"
+    assert updated_driver["license_number"] == "TS-12-2018-0004567"
     assert updated_driver["status"] == "inactive"
 
 
@@ -2647,3 +2671,891 @@ def test_cancel_trip_with_reason(client):
     # The last log item should contain our cancellation reason
     cancel_log = [log for log in history_res if log["status"] == "cancelled"][0]
     assert "Driver emergency, vehicle breakdown" in cancel_log["note"]
+
+
+def test_driver_payout_generation_and_settlement(client, db_session):
+    from datetime import datetime
+
+    from app.models.trip import Trip
+
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create admin user for deletion tests
+    create_user_with_role(
+        db_session,
+        username="admin_user",
+        email="admin@example.com",
+        password="adminpassword",
+        role="admin",
+    )
+    admin_token = get_token(client, username="admin_user", password="adminpassword")
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    # 1. Create a driver with base salary and commission
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Salary Driver",
+            "phone": "9998881234",
+            "license_number": "KL-12-2018-0004567",
+            "license_expiry": "2030-12-31T00:00:00",
+            "base_salary": 15000.0,
+            "commission_percentage": 80.0,
+        },
+        headers=headers,
+    )
+    assert driver_res.status_code == 200
+    driver_data = driver_res.json()
+    assert driver_data["base_salary"] == 15000.0
+    assert driver_data["commission_percentage"] == 80.0
+
+    # 2. Update the driver's base salary and commission
+    update_res = client.patch(
+        f"/drivers/{driver_data['id']}",
+        json={
+            "base_salary": 20000.0,
+            "commission_percentage": 75.0,
+        },
+        headers=headers,
+    )
+    assert update_res.status_code == 200
+    updated_driver = update_res.json()
+    assert updated_driver["base_salary"] == 20000.0
+    assert updated_driver["commission_percentage"] == 75.0
+
+    # 3. Create and complete a trip for the driver
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Point A",
+            "destination": "Point B",
+            "distance_km": 10.0,
+            "duration_minutes": 20,
+            "estimated_fare": 200.0,
+        },
+        headers=headers,
+    )
+    assert trip_res.status_code == 200
+    trip_data = trip_res.json()
+
+    # Assign, start, and complete the trip
+    assign_res = client.patch(
+        f"/trips/{trip_data['id']}/assign",
+        json={"driver_id": driver_data["id"]},
+        headers=headers,
+    )
+    assert assign_res.status_code == 200
+
+    start_res = client.patch(
+        f"/trips/{trip_data['id']}/start",
+        json={"note": "starting"},
+        headers=headers,
+    )
+    assert start_res.status_code == 200
+
+    complete_res = client.patch(
+        f"/trips/{trip_data['id']}/complete",
+        json={"note": "completed"},
+        headers=headers,
+    )
+    assert complete_res.status_code == 200
+
+    # Update completed trip end_time manually to align with a specific
+    # month/year (July 2026)
+    trip_db = db_session.query(Trip).filter(Trip.id == trip_data["id"]).first()
+    trip_db.end_time = datetime(2026, 7, 15, 12, 0, 0)
+    db_session.commit()
+
+    # 4. Generate payout for July 2026
+    # Driver now has: base_salary=20000, commission_percentage=75%, trip fare=200
+    # Expected commission = 200 * 0.75 = 150
+    # Expected base salary = 20000
+    # Expected total paid = 20150
+    gen_res = client.post(
+        f"/drivers/{driver_data['id']}/payments/generate?year=2026&month=7",
+        headers=headers,
+    )
+    assert gen_res.status_code == 200
+    payout_data = gen_res.json()
+    assert payout_data["base_salary_paid"] == 20000.0
+    assert payout_data["commission_paid"] == 150.0
+    assert payout_data["total_paid"] == 20150.0
+    assert payout_data["status"] == "pending"
+
+    # Try generating again (should fail due to unique constraint)
+    gen_dup = client.post(
+        f"/drivers/{driver_data['id']}/payments/generate?year=2026&month=7",
+        headers=headers,
+    )
+    assert gen_dup.status_code == 400
+
+    # 5. Get payments list
+    list_res = client.get(
+        "/drivers/payments?year=2026&month=7",
+        headers=headers,
+    )
+    assert list_res.status_code == 200
+    assert len(list_res.json()) == 1
+    assert list_res.json()[0]["id"] == payout_data["id"]
+
+    # 6. Settle payout (PATCH)
+    # Apply a ₹1,000 bonus and ₹500 deductions, set status to paid
+    settle_res = client.patch(
+        f"/drivers/payments/{payout_data['id']}",
+        json={
+            "status": "paid",
+            "bonus": 1000.0,
+            "deductions": 500.0,
+            "payment_method": "UPI",
+            "note": "Salary settled",
+        },
+        headers=headers,
+    )
+    assert settle_res.status_code == 200
+    settled_data = settle_res.json()
+    assert settled_data["bonus"] == 1000.0
+    assert settled_data["deductions"] == 500.0
+    # Net: 20000 (base) + 150 (comm) + 1000 (bonus) - 500 (ded) = 20650
+    assert settled_data["total_paid"] == 20650.0
+    assert settled_data["status"] == "paid"
+    assert settled_data["paid_at"] is not None
+
+    # Try deleting a paid payout (should fail)
+    del_fail = client.delete(
+        f"/drivers/payments/{payout_data['id']}",
+        headers=admin_headers,
+    )
+    assert del_fail.status_code == 400
+
+    # 7. Generate payout for August 2026 (for deletion test)
+    gen_res2 = client.post(
+        f"/drivers/{driver_data['id']}/payments/generate?year=2026&month=8",
+        headers=headers,
+    )
+    assert gen_res2.status_code == 200
+    payout2_data = gen_res2.json()
+
+    # Delete pending payout (should succeed)
+    del_ok = client.delete(
+        f"/drivers/payments/{payout2_data['id']}",
+        headers=admin_headers,
+    )
+    assert del_ok.status_code == 200
+
+    # 8. Verify PDF Invoice Generation
+    pdf_res = client.get(
+        f"/drivers/payments/{payout_data['id']}/invoice",
+        headers=headers,
+    )
+    assert pdf_res.status_code == 200
+    assert pdf_res.headers["content-type"] == "application/pdf"
+    assert b"PDF" in pdf_res.content[:10]
+
+    # 9. Verify CSV Payments Export
+    csv_res = client.get(
+        "/drivers/payments/export?year=2026&month=7",
+        headers=headers,
+    )
+    assert csv_res.status_code == 200
+    assert csv_res.headers["content-type"] == "text/csv; charset=utf-8"
+    csv_content = csv_res.content.decode("utf-8")
+    assert "Payment ID" in csv_content
+    assert "Salary Driver" in csv_content
+    assert "20650.0" in csv_content
+
+
+def test_list_trips_filtering_by_destination_company(client):
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Create a trip with destination company "Alpha Corp"
+    t1_res = client.post(
+        "/trips/",
+        json={
+            "source": "Warehouse A",
+            "destination": "Alpha Depot",
+            "source_company": "Logistics Ltd",
+            "destination_company": "Alpha Corp",
+        },
+        headers=headers,
+    )
+    assert t1_res.status_code == 200
+
+    # 2. Create another trip with destination company "Beta Corp"
+    t2_res = client.post(
+        "/trips/",
+        json={
+            "source": "Warehouse B",
+            "destination": "Beta Depot",
+            "source_company": "Logistics Ltd",
+            "destination_company": "Beta Corp",
+        },
+        headers=headers,
+    )
+    assert t2_res.status_code == 200
+
+    # 3. Query with destination_company=Alpha Corp
+    res_alpha = client.get(
+        "/trips/?destination_company=Alpha Corp",
+        headers=headers,
+    )
+    assert res_alpha.status_code == 200
+    trips_alpha = res_alpha.json()
+    assert len(trips_alpha) >= 1
+    for t in trips_alpha:
+        assert "Alpha Corp" in t["destination_company"]
+
+    # 4. Query with destination_company=Beta Corp
+    res_beta = client.get(
+        "/trips/?destination_company=Beta Corp",
+        headers=headers,
+    )
+    assert res_beta.status_code == 200
+    trips_beta = res_beta.json()
+    assert len(trips_beta) >= 1
+    for t in trips_beta:
+        assert "Beta Corp" in t["destination_company"]
+
+
+def test_trip_auto_distance_and_duration_calculation(client, db_session):
+    from datetime import datetime, timedelta
+
+    from app.models.driver import DriverLocationHistory
+    from app.models.trip import Trip
+
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create a driver
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Tracking Driver",
+            "phone": "9998889999",
+            "license_number": "TN-12-2018-0004567",
+            "license_expiry": "2030-12-31T00:00:00",
+        },
+        headers=headers,
+    )
+    assert driver_res.status_code == 200
+    driver_id = driver_res.json()["id"]
+
+    # Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Point A",
+            "destination": "Point B",
+        },
+        headers=headers,
+    )
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    # Assign the trip
+    client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver_id},
+        headers=headers,
+    )
+
+    # Start the trip
+    client.patch(
+        f"/trips/{trip_id}/start",
+        headers=headers,
+    )
+
+    # Set start_time manually
+    trip_db = db_session.query(Trip).filter(Trip.id == trip_id).first()
+    trip_db.start_time = datetime.utcnow() - timedelta(minutes=45)
+    db_session.commit()
+
+    # Add some location history points
+    p1 = DriverLocationHistory(
+        driver_id=driver_id,
+        trip_id=trip_id,
+        latitude=19.0,
+        longitude=72.0,
+        recorded_at=datetime.utcnow() - timedelta(minutes=40),
+    )
+    p2 = DriverLocationHistory(
+        driver_id=driver_id,
+        trip_id=trip_id,
+        latitude=19.1,
+        longitude=72.1,
+        recorded_at=datetime.utcnow() - timedelta(minutes=20),
+    )
+    db_session.add(p1)
+    db_session.add(p2)
+    db_session.commit()
+
+    # Complete the trip
+    complete_res = client.patch(
+        f"/trips/{trip_id}/complete",
+        headers=headers,
+    )
+    assert complete_res.status_code == 200
+
+    # Verify auto calculated distance and duration
+    db_session.refresh(trip_db)
+    assert trip_db.distance_km is not None
+    assert trip_db.duration_minutes is not None
+    assert trip_db.distance_km > 0
+    assert trip_db.duration_minutes > 0
+
+
+def test_trips_export_csv(client):
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create a trip
+    client.post(
+        "/trips/",
+        json={
+            "source": "Export Origin",
+            "destination": "Export Dest",
+            "distance_km": 15.0,
+            "duration_minutes": 30,
+            "estimated_fare": 250.0,
+        },
+        headers=headers,
+    )
+
+    # Export trips
+    export_res = client.get(
+        "/trips/export?status=created",
+        headers=headers,
+    )
+    assert export_res.status_code == 200
+    assert export_res.headers["content-type"] == "text/csv; charset=utf-8"
+    csv_content = export_res.content.decode("utf-8")
+    assert "Trip ID" in csv_content
+    assert "Export Origin" in csv_content
+    assert "Export Dest" in csv_content
+
+
+def test_trips_export_pdf(client):
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create a trip
+    client.post(
+        "/trips/",
+        json={
+            "source": "Export PDF Origin",
+            "destination": "Export PDF Dest",
+            "distance_km": 25.0,
+            "duration_minutes": 45,
+            "estimated_fare": 450.0,
+        },
+        headers=headers,
+    )
+
+    # Export trips PDF
+    export_res = client.get(
+        "/trips/export-pdf?status=created",
+        headers=headers,
+    )
+    assert export_res.status_code == 200
+    assert export_res.headers["content-type"] == "application/pdf"
+    assert b"PDF" in export_res.content[:10]
+
+
+def test_websocket_location_broadcast(client):
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Connect to the WebSocket
+    with client.websocket_connect(f"/ws/dispatch?token={token}") as websocket:
+        # Create a driver using the REST API
+        driver_res = client.post(
+            "/drivers/",
+            json={
+                "name": "WS Tracking Driver",
+                "phone": "9992223333",
+                "license_number": "BR-12-2018-0004567",
+                "license_expiry": "2030-12-31T00:00:00",
+                "username": "ws_driver",
+                "password": "ws_password",
+            },
+            headers=headers,
+        )
+        assert driver_res.status_code == 200
+
+        # Log in as the driver to get access token
+        driver_token = client.post(
+            "/auth/token", data={"username": "ws_driver", "password": "ws_password"}
+        ).json()["access_token"]
+        driver_headers = {"Authorization": f"Bearer {driver_token}"}
+
+        # Post location update as driver
+        loc_res = client.post(
+            "/drivers/location",
+            json={"latitude": 19.5, "longitude": 72.8},
+            headers=driver_headers,
+        )
+        assert loc_res.status_code == 200
+
+        # Receive broadcast message on dispatcher WebSocket
+        message = websocket.receive_json()
+        assert message["type"] == "location_update"
+        assert message["driver_name"] == "WS Tracking Driver"
+        assert message["latitude"] == 19.5
+        assert message["longitude"] == 72.8
+
+
+def test_websocket_trip_status_broadcast(client):
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Connect dispatcher to WebSocket
+    with client.websocket_connect(f"/ws/dispatch?token={token}") as websocket:
+        # Create a trip
+        trip_res = client.post(
+            "/trips/",
+            json={
+                "source": "WS Start",
+                "destination": "WS End",
+                "distance_km": 10.0,
+                "duration_minutes": 20,
+                "estimated_fare": 200.0,
+            },
+            headers=headers,
+        )
+        assert trip_res.status_code == 200
+        trip_data = trip_res.json()
+
+        # Receive the 'created' status history broadcast
+        msg = websocket.receive_json()
+        assert msg["type"] == "trip_status_update"
+        assert msg["trip_id"] == trip_data["id"]
+        assert msg["status"] == "created"
+
+
+def test_websocket_connection_auth_failures(client):
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+
+    # Missing token
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect("/ws/dispatch") as websocket:
+            websocket.receive_text()
+    assert excinfo.value.code == 1008
+
+    # Invalid token
+    with pytest.raises(WebSocketDisconnect) as excinfo:
+        with client.websocket_connect("/ws/dispatch?token=invalid_token") as websocket:
+            websocket.receive_text()
+    assert excinfo.value.code == 4003
+
+
+def test_get_trip_location_history(client, db_session):
+    create_user(client)
+    token = get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create a driver using the API
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Playback Tester",
+            "phone": "9876543210",
+            "license_number": "JK-12-2018-0004567",
+            "license_expiry": "2030-12-31T00:00:00",
+            "username": "playback_driver",
+            "password": "playback_password",
+        },
+        headers=headers,
+    )
+    assert driver_res.status_code == 200
+    driver_id = driver_res.json()["id"]
+
+    # Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Start Pt",
+            "destination": "End Pt",
+            "distance_km": 12.0,
+            "duration_minutes": 25,
+            "estimated_fare": 200.0,
+        },
+        headers=headers,
+    )
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    # Assign trip
+    assign_res = client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver_id},
+        headers=headers,
+    )
+    assert assign_res.status_code == 200
+
+    # Start trip
+    start_res = client.patch(
+        f"/trips/{trip_id}/start",
+        headers=headers,
+    )
+    assert start_res.status_code == 200
+
+    # Log in as driver to post location coordinates
+    driver_token = client.post(
+        "/auth/token",
+        data={"username": "playback_driver", "password": "playback_password"},
+    ).json()["access_token"]
+    driver_headers = {"Authorization": f"Bearer {driver_token}"}
+
+    # Post multiple driver coordinates
+    loc1 = client.post(
+        "/drivers/location",
+        json={"latitude": 18.5, "longitude": 73.1},
+        headers=driver_headers,
+    )
+    assert loc1.status_code == 200
+
+    loc2 = client.post(
+        "/drivers/location",
+        json={"latitude": 18.6, "longitude": 73.2},
+        headers=driver_headers,
+    )
+    assert loc2.status_code == 200
+
+    # Fetch location-history as dispatcher
+    history_res = client.get(
+        f"/trips/{trip_id}/location-history",
+        headers=headers,
+    )
+    assert history_res.status_code == 200
+    history_data = history_res.json()
+    assert len(history_data) >= 2
+    assert history_data[0]["latitude"] == 18.5
+    assert history_data[0]["longitude"] == 73.1
+    assert history_data[1]["latitude"] == 18.6
+    assert history_data[1]["longitude"] == 73.2
+
+
+def test_hybrid_vehicle_assignment(client, db_session):
+    from datetime import datetime, timedelta
+
+    from app.core.security import hash_password
+    from app.models.driver import Driver
+    from app.models.trip import Trip
+    from app.models.user import User
+    from app.models.vehicle import Vehicle
+
+    # Create dispatcher user
+    disp_user = User(
+        username="disp_hybrid",
+        email="disp_hybrid@example.com",
+        hashed_password=hash_password("secret123"),
+        role="dispatcher",
+    )
+    db_session.add(disp_user)
+    db_session.commit()
+
+    token = get_token(client, username="disp_hybrid", password="secret123")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create vehicles
+    vehicle_a = Vehicle(
+        make="Tata",
+        model="A",
+        year=2024,
+        license_plate="MH-12-HY-1111",
+        odometer_km=1000.0,
+    )
+    vehicle_b = Vehicle(
+        make="Tata",
+        model="B",
+        year=2024,
+        license_plate="MH-12-HY-2222",
+        odometer_km=2000.0,
+    )
+    db_session.add(vehicle_a)
+    db_session.add(vehicle_b)
+    db_session.commit()
+
+    # Create driver user
+    driver_user = User(
+        username="driver_hybrid",
+        email="driver_hybrid@example.com",
+        hashed_password=hash_password("secret123"),
+        role="driver",
+    )
+    db_session.add(driver_user)
+    db_session.commit()
+
+    # Create driver profile assigned to vehicle_a
+    driver = Driver(
+        name="Driver Hybrid",
+        phone="9988776655",
+        status="available",
+        license_number="DL-12-2018-9999999",
+        license_expiry=datetime.utcnow() + timedelta(days=100),
+        user_id=driver_user.id,
+        vehicle_id=vehicle_a.id,
+        vehicle_type="cargo_truck",
+    )
+    db_session.add(driver)
+    db_session.commit()
+
+    # Create trip
+    trip_payload = {
+        "source": "Pune",
+        "destination": "Mumbai",
+        "distance_km": 150.0,
+        "duration_minutes": 180,
+    }
+    trip_res = client.post("/trips/", json=trip_payload, headers=headers)
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    # 1. Assign driver without overriding vehicle
+    # (should fallback to driver's vehicle A)
+    assign_res = client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver.id},
+        headers=headers,
+    )
+    assert assign_res.status_code == 200
+
+    trip_db = db_session.query(Trip).filter(Trip.id == trip_id).first()
+    assert trip_db.vehicle_id == vehicle_a.id
+
+    # 2. Reassign driver with overriding vehicle B
+    # Make driver available again so they can be reassigned
+    driver.status = "available"
+    db_session.commit()
+
+    reassign_res = client.patch(
+        f"/trips/{trip_id}/reassign",
+        json={"driver_id": driver.id, "vehicle_id": vehicle_b.id},
+        headers=headers,
+    )
+    assert reassign_res.status_code == 200
+
+    db_session.refresh(trip_db)
+    assert trip_db.vehicle_id == vehicle_b.id
+
+    # Start the trip
+    start_res = client.patch(f"/trips/{trip_id}/start", headers=headers)
+    assert start_res.status_code == 200
+
+    # Complete the trip (which adds distance to vehicle odometer)
+    complete_res = client.patch(f"/trips/{trip_id}/complete", headers=headers)
+    assert complete_res.status_code == 200
+
+    # Verify odometer updates on vehicle B but not vehicle A
+    db_session.refresh(vehicle_a)
+    db_session.refresh(vehicle_b)
+    assert vehicle_a.odometer_km == 1000.0  # untouched
+    assert vehicle_b.odometer_km == 2150.0  # 2000 + 150
+
+
+def test_sms_notification_on_assignment(client, db_session):
+    from datetime import datetime, timedelta
+    from unittest.mock import patch
+
+    from app.core.security import hash_password
+    from app.models.driver import Driver
+    from app.models.user import User
+
+    # Create dispatcher user
+    disp_user = User(
+        username="disp_sms",
+        email="disp_sms@example.com",
+        hashed_password=hash_password("secret123"),
+        role="dispatcher",
+    )
+    db_session.add(disp_user)
+    db_session.commit()
+
+    token = get_token(client, username="disp_sms", password="secret123")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create driver user
+    driver_user = User(
+        username="driver_sms",
+        email="driver_sms@example.com",
+        hashed_password=hash_password("secret123"),
+        role="driver",
+    )
+    db_session.add(driver_user)
+    db_session.commit()
+
+    # Create driver profile
+    driver = Driver(
+        name="Driver SMS",
+        phone="9988776655",
+        status="available",
+        license_number="DL-12-2018-8888888",
+        license_expiry=datetime.utcnow() + timedelta(days=100),
+        user_id=driver_user.id,
+        vehicle_type="cargo_truck",
+    )
+    db_session.add(driver)
+    db_session.commit()
+
+    # Create trip
+    trip_payload = {
+        "source": "Pune",
+        "destination": "Mumbai",
+        "distance_km": 150.0,
+        "duration_minutes": 180,
+    }
+    trip_res = client.post("/trips/", json=trip_payload, headers=headers)
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    # We mock send_sms function to see if it gets called with correct params
+    with patch("app.api.trip.send_sms") as mock_send_sms:
+        # Assign driver
+        assign_res = client.patch(
+            f"/trips/{trip_id}/assign",
+            json={"driver_id": driver.id},
+            headers=headers,
+        )
+        assert assign_res.status_code == 200
+
+        # Verify send_sms was called in the background task
+        mock_send_sms.assert_called_once()
+        called_phone, called_msg = mock_send_sms.call_args[0]
+        assert called_phone == "9988776655"
+        assert "Pune" in called_msg
+        assert "Mumbai" in called_msg
+        assert "Driver SMS" in called_msg
+        assert f"Trip ID: {trip_id}" in called_msg
+
+
+def test_indian_license_validation(client, db_session):
+    from app.core.security import hash_password
+    from app.models.user import User
+
+    # Create dispatcher user
+    disp_user = User(
+        username="disp_license",
+        email="disp_license@example.com",
+        hashed_password=hash_password("secret123"),
+        role="dispatcher",
+    )
+    db_session.add(disp_user)
+    db_session.commit()
+
+    token = get_token(client, username="disp_license", password="secret123")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Test invalid license format (fails with 400)
+    invalid_driver_payload = {
+        "name": "Invalid DL Driver",
+        "phone": "9998887776",
+        "license_number": "ABC-12345",  # invalid format
+        "license_expiry": "2030-12-31T00:00:00",
+        "vehicle_type": "cargo_truck",
+    }
+    res_invalid = client.post("/drivers/", json=invalid_driver_payload, headers=headers)
+    assert res_invalid.status_code == 400
+    assert "Invalid Indian driving license format" in res_invalid.json()["detail"]
+
+    # 2. Test valid license format (succeeds)
+    valid_driver_payload = {
+        "name": "Valid DL Driver",
+        "phone": "9998887775",
+        "license_number": "MH-12-2018-0004567",  # valid format
+        "license_expiry": "2030-12-31T00:00:00",
+        "vehicle_type": "cargo_truck",
+    }
+    res_valid = client.post("/drivers/", json=valid_driver_payload, headers=headers)
+    assert res_valid.status_code == 200
+    driver_data = res_valid.json()
+    assert driver_data["license_number"] == "MH-12-2018-0004567"
+
+
+def test_trip_speed_warning(client, db_session):
+    from datetime import datetime, timedelta
+    from unittest.mock import patch
+
+    from app.core.security import hash_password
+    from app.models.driver import Driver
+    from app.models.user import User
+
+    # Create dispatcher user
+    disp_user = User(
+        username="disp_speed",
+        email="disp_speed@example.com",
+        hashed_password=hash_password("secret123"),
+        role="dispatcher",
+    )
+    db_session.add(disp_user)
+    db_session.commit()
+
+    token = get_token(client, username="disp_speed", password="secret123")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create driver user
+    driver_user = User(
+        username="driver_speed",
+        email="driver_speed@example.com",
+        hashed_password=hash_password("secret123"),
+        role="driver",
+    )
+    db_session.add(driver_user)
+    db_session.commit()
+
+    # Create driver profile
+    driver = Driver(
+        name="Driver Speed",
+        phone="9988776655",
+        status="available",
+        license_number="DL-12-2018-1111111",
+        license_expiry=datetime.utcnow() + timedelta(days=100),
+        user_id=driver_user.id,
+        vehicle_type="cargo_truck",
+    )
+    db_session.add(driver)
+    db_session.commit()
+
+    # Create trip
+    trip_payload = {
+        "source": "Indore",
+        "destination": "Bhopal",
+        "distance_km": 200.0,
+        "duration_minutes": 120,  # 200 km in 2 hours = 100 km/h avg speed (> 60 km/h)
+    }
+    trip_res = client.post("/trips/", json=trip_payload, headers=headers)
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    # Assign driver
+    assign_res = client.patch(
+        f"/trips/{trip_id}/assign",
+        json={"driver_id": driver.id},
+        headers=headers,
+    )
+    assert assign_res.status_code == 200
+
+    # Start trip
+    start_res = client.patch(f"/trips/{trip_id}/start", headers=headers)
+    assert start_res.status_code == 200
+
+    # Complete trip and check for warning in response and SMS
+    with patch("app.api.trip.send_sms") as mock_send_sms:
+        complete_res = client.patch(f"/trips/{trip_id}/complete", headers=headers)
+        assert complete_res.status_code == 200
+        assert "warning" in complete_res.json()
+        assert "exceeds 60 km/h limit" in complete_res.json()["warning"]
+
+        # Verify warning SMS was triggered to driver
+        mock_send_sms.assert_called_once()
+        called_phone, called_msg = mock_send_sms.call_args[0]
+        assert called_phone == "9988776655"
+        assert "exceeded the speed limit of 60 km/h" in called_msg

@@ -662,3 +662,32 @@ body {
   100% { opacity: 1;   transform: scale(1);   box-shadow: 0 0 0   0   rgba(69, 242, 72, 0); }
 }
 
+/* Print styles */
+@media screen {
+  .print-only {
+    display: none !important;
+  }
+}
+
+@media print {
+  .no-print, .app-container {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+    background: #fff !important;
+    color: #000 !important;
+    font-family: Arial, sans-serif !important;
+  }
+  .print-table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+  .print-table th, .print-table td {
+    border: 1px solid #000 !important;
+    padding: 8px !important;
+    color: #000 !important;
+    text-align: left !important;
+  }
+}
+

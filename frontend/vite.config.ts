@@ -10,6 +10,12 @@ export default defineConfig({
       '/users': 'http://127.0.0.1:8000',
       '/drivers': 'http://127.0.0.1:8000',
       '/trips': 'http://127.0.0.1:8000',
+      '/vehicles': 'http://127.0.0.1:8000',
+      '/fuel': 'http://127.0.0.1:8000',
+      '/ws': {
+        target: 'ws://127.0.0.1:8000',
+        ws: true
+      }
     }
   }
 })

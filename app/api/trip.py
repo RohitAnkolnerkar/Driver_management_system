@@ -1,15 +1,17 @@
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
 from app.api.driver import record_driver_status_change
+from app.core.sms import send_sms
 from app.db import get_db
-from app.models.driver import Driver, DriverAvailabilityHistory
+from app.models.driver import Driver, DriverAvailabilityHistory, DriverLocationHistory
 from app.models.trip import Trip, TripHistory
+from app.models.vehicle import Vehicle
 from app.schemas.trip import (
     AssignDriver,
     BulkTripAssignmentRequest,
@@ -22,6 +24,7 @@ from app.schemas.trip import (
     TripFareEstimateRequest,
     TripFareEstimateResponse,
     TripHistoryResponse,
+    TripLocationResponse,
     TripResponse,
     TripStatsResponse,
     TripSummaryCreate,
@@ -38,6 +41,26 @@ def record_trip_status_change(
 ):
     history_entry = TripHistory(trip_id=trip_id, status=status, note=note)
     db.add(history_entry)
+
+    # Broadcast status change via WebSockets (safe wrapper)
+    try:
+        trip = db.query(Trip).filter(Trip.id == trip_id).first()
+        driver_id = trip.driver_id if trip else None
+
+        from app.api.ws import broadcast_update
+
+        broadcast_update(
+            {
+                "type": "trip_status_update",
+                "trip_id": trip_id,
+                "status": status,
+                "note": note,
+                "driver_id": driver_id,
+            }
+        )
+    except Exception:
+        pass
+
     return history_entry
 
 
@@ -212,6 +235,11 @@ def create_trip(
                 ),
             )
 
+    if trip.vehicle_id is not None:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == trip.vehicle_id).first()
+        if not vehicle:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+
     db_trip = Trip(**trip_data)
     db.add(db_trip)
     db.flush()
@@ -253,6 +281,7 @@ def list_trips(
     status: Optional[str] = None,
     driver_id: Optional[int] = None,
     source_company: Optional[str] = None,
+    destination_company: Optional[str] = None,
     q: Optional[str] = None,
     scheduled_on: Optional[date] = None,
     created_after: Optional[datetime] = None,
@@ -288,6 +317,9 @@ def list_trips(
 
     if source_company:
         query = query.filter(Trip.source_company.ilike(f"%{source_company}%"))
+
+    if destination_company:
+        query = query.filter(Trip.destination_company.ilike(f"%{destination_company}%"))
 
     if created_after:
         query = query.filter(Trip.created_at >= created_after)
@@ -442,6 +474,169 @@ def get_trip_stats(
     }
 
 
+@router.get("/export")
+def export_trips(
+    status: Optional[str] = Query(None),
+    driver_id: Optional[int] = Query(None),
+    source_company: Optional[str] = Query(None),
+    destination_company: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    scheduled_on: Optional[date] = Query(None),
+    created_after: Optional[datetime] = Query(None),
+    created_before: Optional[datetime] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = db.query(Trip)
+
+    # If driver user, restrict to their own trips
+    if current_user.role == "driver":
+        driver = db.query(Driver).filter(Driver.user_id == current_user.id).first()
+        if driver:
+            query = query.filter(Trip.driver_id == driver.id)
+        else:
+            query = query.filter(Trip.driver_id == -1)
+
+    if status:
+        query = query.filter(Trip.status == status)
+    if driver_id is not None:
+        query = query.filter(Trip.driver_id == driver_id)
+    if source_company:
+        query = query.filter(Trip.source_company.ilike(f"%{source_company}%"))
+    if destination_company:
+        query = query.filter(Trip.destination_company.ilike(f"%{destination_company}%"))
+    if q:
+        query = query.filter(
+            or_(
+                Trip.source.ilike(f"%{q}%"),
+                Trip.destination.ilike(f"%{q}%"),
+            )
+        )
+    if scheduled_on:
+        query = query.filter(func.date(Trip.scheduled_date) == scheduled_on)
+    if created_after:
+        query = query.filter(Trip.created_at >= created_after)
+    if created_before:
+        query = query.filter(Trip.created_at <= created_before)
+
+    trips = query.order_by(Trip.created_at.desc()).all()
+
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow(
+        [
+            "Trip ID",
+            "Driver ID",
+            "Driver Name",
+            "Source",
+            "Destination",
+            "Distance (KM)",
+            "Duration (Mins)",
+            "Estimated Fare (INR)",
+            "Priority",
+            "Status",
+            "Scheduled Date",
+            "Start Time",
+            "End Time",
+            "Created At",
+        ]
+    )
+
+    for t in trips:
+        driver_name = t.driver.name if t.driver else "Unassigned"
+        writer.writerow(
+            [
+                t.id,
+                t.driver_id or "N/A",
+                driver_name,
+                t.source,
+                t.destination,
+                t.distance_km or 0.0,
+                t.duration_minutes or 0,
+                t.estimated_fare or 0.0,
+                t.priority,
+                t.status,
+                t.scheduled_date.isoformat() if t.scheduled_date else "N/A",
+                t.start_time.isoformat() if t.start_time else "N/A",
+                t.end_time.isoformat() if t.end_time else "N/A",
+                t.created_at.isoformat(),
+            ]
+        )
+
+    output.seek(0)
+
+    headers = {"Content-Disposition": "attachment; filename=trips_export.csv"}
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers=headers,
+    )
+
+
+@router.get("/export-pdf")
+def export_trips_pdf(
+    status: Optional[str] = Query(None),
+    driver_id: Optional[int] = Query(None),
+    source_company: Optional[str] = Query(None),
+    destination_company: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    scheduled_on: Optional[date] = Query(None),
+    created_after: Optional[datetime] = Query(None),
+    created_before: Optional[datetime] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = db.query(Trip)
+
+    # If driver user, restrict to their own trips
+    if current_user.role == "driver":
+        driver = db.query(Driver).filter(Driver.user_id == current_user.id).first()
+        if driver:
+            query = query.filter(Trip.driver_id == driver.id)
+        else:
+            query = query.filter(Trip.driver_id == -1)
+
+    if status:
+        query = query.filter(Trip.status == status)
+    if driver_id is not None:
+        query = query.filter(Trip.driver_id == driver_id)
+    if source_company:
+        query = query.filter(Trip.source_company.ilike(f"%{source_company}%"))
+    if destination_company:
+        query = query.filter(Trip.destination_company.ilike(f"%{destination_company}%"))
+    if q:
+        query = query.filter(
+            or_(
+                Trip.source.ilike(f"%{q}%"),
+                Trip.destination.ilike(f"%{q}%"),
+            )
+        )
+    if scheduled_on:
+        query = query.filter(func.date(Trip.scheduled_date) == scheduled_on)
+    if created_after:
+        query = query.filter(Trip.created_at >= created_after)
+    if created_before:
+        query = query.filter(Trip.created_at <= created_before)
+
+    trips = query.order_by(Trip.created_at.desc()).all()
+
+    from fastapi.responses import StreamingResponse
+
+    from app.core.pdf import generate_trips_manifest_pdf
+
+    pdf_buffer = generate_trips_manifest_pdf(trips)
+
+    headers = {"Content-Disposition": "attachment; filename=trips_manifest.pdf"}
+    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
+
+
 @router.get("/{trip_id}", response_model=TripResponse)
 def get_trip(
     trip_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
@@ -540,6 +735,12 @@ def update_trip(
         dist = trip.distance_km if trip.distance_km is not None else 0.0
         trip.estimated_fare = calculate_estimated_fare(dist, trip.duration_minutes)
 
+    if trip_update.vehicle_id is not None:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == trip_update.vehicle_id).first()
+        if not vehicle:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        trip.vehicle_id = trip_update.vehicle_id
+
     db.commit()
     db.refresh(trip)
     return trip
@@ -548,6 +749,7 @@ def update_trip(
 @router.post("/bulk-assign", response_model=BulkTripAssignmentResponse)
 def bulk_assign_trips(
     data: BulkTripAssignmentRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
@@ -564,6 +766,11 @@ def bulk_assign_trips(
     if driver.status != "available":
         raise HTTPException(400, "Driver is not available")
 
+    if data.vehicle_id is not None:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == data.vehicle_id).first()
+        if not vehicle:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+
     trip_ids = list(dict.fromkeys(data.trip_ids))
     trips = db.query(Trip).filter(Trip.id.in_(trip_ids)).all()
 
@@ -575,11 +782,24 @@ def bulk_assign_trips(
             raise HTTPException(400, "Only created trips can be bulk assigned")
 
         trip.driver_id = driver.id
+        if data.vehicle_id is not None:
+            trip.vehicle_id = data.vehicle_id
+        elif driver.vehicle_id:
+            trip.vehicle_id = driver.vehicle_id
         trip.status = "assigned"
 
     driver.status = "on_trip"
     record_driver_status_change(db, driver.id, driver.status, "bulk assigned to trips")
     db.commit()
+
+    if driver.phone and trips:
+        trip_ids_str = ", ".join(str(t.id) for t in trips)
+        sms_body = (
+            f"Hello {driver.name}, you have been assigned {len(trips)} new trips!\n"
+            f"Trip IDs: {trip_ids_str}\n"
+            f"Please check your dashboard for details."
+        )
+        background_tasks.add_task(send_sms, driver.phone, sms_body)
 
     return {
         "assigned_count": len(trips),
@@ -592,6 +812,7 @@ def bulk_assign_trips(
 def assign_driver(
     trip_id: int,
     data: AssignDriver,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
@@ -610,7 +831,16 @@ def assign_driver(
     if driver.status != "available":
         raise HTTPException(400, "Driver is not available")
 
+    is_new_assignment = trip.driver_id != driver.id
+
     trip.driver_id = driver.id
+    if data.vehicle_id is not None:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == data.vehicle_id).first()
+        if not vehicle:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        trip.vehicle_id = vehicle.id
+    elif driver.vehicle_id:
+        trip.vehicle_id = driver.vehicle_id
     trip.status = "assigned"
 
     driver.status = "on_trip"
@@ -619,6 +849,22 @@ def assign_driver(
 
     db.commit()
 
+    if is_new_assignment and driver.phone:
+        v_info = (
+            f"{trip.vehicle.make} {trip.vehicle.model} ({trip.vehicle.license_plate})"
+            if trip.vehicle
+            else "N/A"
+        )
+        sms_body = (
+            f"Hello {driver.name}, you have been assigned a new trip!\n"
+            f"Trip ID: {trip.id}\n"
+            f"Route: {trip.source} -> {trip.destination}\n"
+            f"Est. Distance: {trip.distance_km or 'N/A'} km\n"
+            f"Vehicle: {v_info}\n"
+            f"Please check your dashboard for details."
+        )
+        background_tasks.add_task(send_sms, driver.phone, sms_body)
+
     return {"message": "Driver assigned successfully"}
 
 
@@ -626,6 +872,7 @@ def assign_driver(
 def reassign_driver(
     trip_id: int,
     data: AssignDriver,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
@@ -646,6 +893,8 @@ def reassign_driver(
     if trip.status != "assigned":
         raise HTTPException(400, "Trip can only be reassigned while assigned")
 
+    is_new_assignment = trip.driver_id != new_driver.id
+
     if trip.driver_id:
         old_driver = db.query(Driver).filter(Driver.id == trip.driver_id).first()
         if old_driver:
@@ -655,6 +904,13 @@ def reassign_driver(
             )
 
     trip.driver_id = new_driver.id
+    if data.vehicle_id is not None:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == data.vehicle_id).first()
+        if not vehicle:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        trip.vehicle_id = vehicle.id
+    elif new_driver.vehicle_id:
+        trip.vehicle_id = new_driver.vehicle_id
     trip.status = "assigned"
     new_driver.status = "on_trip"
     record_driver_status_change(
@@ -663,12 +919,29 @@ def reassign_driver(
 
     db.commit()
 
+    if is_new_assignment and new_driver.phone:
+        v_info = (
+            f"{trip.vehicle.make} {trip.vehicle.model} ({trip.vehicle.license_plate})"
+            if trip.vehicle
+            else "N/A"
+        )
+        sms_body = (
+            f"Hello {new_driver.name}, you have been assigned a new trip!\n"
+            f"Trip ID: {trip.id}\n"
+            f"Route: {trip.source} -> {trip.destination}\n"
+            f"Est. Distance: {trip.distance_km or 'N/A'} km\n"
+            f"Vehicle: {v_info}\n"
+            f"Please check your dashboard for details."
+        )
+        background_tasks.add_task(send_sms, new_driver.phone, sms_body)
+
     return {"message": "Driver reassigned successfully"}
 
 
 @router.patch("/{trip_id}/auto-assign")
 def auto_assign_driver(
     trip_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
@@ -711,6 +984,8 @@ def auto_assign_driver(
 
     # Assign trip to the driver
     trip.driver_id = driver.id
+    if driver.vehicle_id:
+        trip.vehicle_id = driver.vehicle_id
     trip.status = "assigned"
 
     driver.status = "on_trip"
@@ -718,6 +993,22 @@ def auto_assign_driver(
     record_trip_status_change(db, trip.id, trip.status, "driver auto-assigned")
 
     db.commit()
+
+    if driver.phone:
+        v_info = (
+            f"{trip.vehicle.make} {trip.vehicle.model} ({trip.vehicle.license_plate})"
+            if trip.vehicle
+            else "N/A"
+        )
+        sms_body = (
+            f"Hello {driver.name}, you have been auto-assigned to a new trip!\n"
+            f"Trip ID: {trip.id}\n"
+            f"Route: {trip.source} -> {trip.destination}\n"
+            f"Est. Distance: {trip.distance_km or 'N/A'} km\n"
+            f"Vehicle: {v_info}\n"
+            f"Please check your dashboard for details."
+        )
+        background_tasks.add_task(send_sms, driver.phone, sms_body)
 
     return {
         "message": "Driver auto-assigned successfully",
@@ -762,6 +1053,7 @@ def start_trip(
 @router.patch("/{trip_id}/complete")
 def complete_trip(
     trip_id: int,
+    background_tasks: BackgroundTasks,
     data: Optional[TripTransitionRequest] = Body(default=None),
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher", "driver")),
@@ -783,6 +1075,74 @@ def complete_trip(
 
     trip.status = "completed"
     trip.end_time = datetime.utcnow()
+
+    # Calculate actual duration in minutes if start_time is set
+    # and duration is > 10 seconds
+    actual_duration = None
+    if trip.start_time:
+        duration_sec = (trip.end_time - trip.start_time).total_seconds()
+        if duration_sec > 10:
+            actual_duration = max(1, int(duration_sec / 60))
+
+    # Calculate actual distance in km from location history
+    import math
+
+    actual_distance = 0.0
+    history = (
+        sorted(trip.location_history, key=lambda x: x.recorded_at)
+        if hasattr(trip, "location_history")
+        else []
+    )
+
+    if len(history) > 1:
+        for i in range(len(history) - 1):
+            p1 = history[i]
+            p2 = history[i + 1]
+            lat1 = math.radians(p1.latitude)
+            lon1 = math.radians(p1.longitude)
+            lat2 = math.radians(p2.latitude)
+            lon2 = math.radians(p2.longitude)
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            actual_distance += 6371.0 * c
+    elif not trip.distance_km or trip.distance_km <= 0.0:
+        # Fallback to straight-line distance ONLY if distance_km is not set originally
+        if (
+            trip.source_latitude is not None
+            and trip.source_longitude is not None
+            and trip.destination_latitude is not None
+            and trip.destination_longitude is not None
+        ):
+            lat1 = math.radians(trip.source_latitude)
+            lon1 = math.radians(trip.source_longitude)
+            lat2 = math.radians(trip.destination_latitude)
+            lon2 = math.radians(trip.destination_longitude)
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            actual_distance = 6371.0 * c
+
+    # Recalculate trip metrics only if actual route tracking data is available
+    if actual_duration is not None or actual_distance > 0.0:
+        if actual_duration is not None:
+            trip.duration_minutes = actual_duration
+        if actual_distance > 0.0:
+            trip.distance_km = round(actual_distance, 2)
+
+        # Ensure we always have non-None values to compute final fare safely
+        dist_for_fare = trip.distance_km if trip.distance_km is not None else 1.0
+        dur_for_fare = trip.duration_minutes
+        trip.estimated_fare = calculate_estimated_fare(dist_for_fare, dur_for_fare)
+
     note = data.note if data else None
     if not note:
         note = "trip completed"
@@ -793,9 +1153,54 @@ def complete_trip(
         if driver:
             driver.status = "available"
 
+            dist = trip.distance_km or 0.0
+            driver.odometer_km = (driver.odometer_km or 0.0) + dist
+            if trip.vehicle:
+                trip.vehicle.odometer_km = (trip.vehicle.odometer_km or 0.0) + dist
+            elif driver.vehicle:
+                driver.vehicle.odometer_km = (driver.vehicle.odometer_km or 0.0) + dist
+
+            EMISSION_RATES = {
+                "light_van": 0.18,
+                "cargo_truck": 0.31,
+                "semi_trailer": 0.88,
+                "electric_truck": 0.04,
+            }
+            CONSUMPTION_RATES = {
+                "light_van": 0.07,
+                "cargo_truck": 0.12,
+                "semi_trailer": 0.32,
+                "electric_truck": 0.20,
+            }
+            v_type = driver.vehicle_type or "cargo_truck"
+            trip.carbon_emissions_kg = round(dist * EMISSION_RATES.get(v_type, 0.31), 2)
+            trip.fuel_consumed_liters = round(
+                dist * CONSUMPTION_RATES.get(v_type, 0.12), 2
+            )
+
     db.commit()
 
-    return {"message": "Trip completed"}
+    avg_speed = 0.0
+    warning_text = None
+    if trip.duration_minutes and trip.duration_minutes > 0 and trip.distance_km:
+        avg_speed = trip.distance_km / (trip.duration_minutes / 60.0)
+        if avg_speed > 60.0:
+            warning_text = (
+                f"Warning: Average speed of {round(avg_speed, 1)} km/h "
+                f"exceeds 60 km/h limit!"
+            )
+            if trip.driver and trip.driver.phone:
+                warning_msg = (
+                    f"Warning: Your average speed of {round(avg_speed, 1)} km/h "
+                    f"for Trip ID {trip.id} exceeded the speed limit of 60 km/h. "
+                    f"Please drive safely!"
+                )
+                background_tasks.add_task(send_sms, trip.driver.phone, warning_msg)
+
+    response_payload = {"message": "Trip completed"}
+    if warning_text:
+        response_payload["warning"] = warning_text
+    return response_payload
 
 
 @router.patch("/{trip_id}/summary", response_model=TripSummaryResponse)
@@ -955,6 +1360,32 @@ def get_trip_history(
         db.query(TripHistory)
         .filter(TripHistory.trip_id == trip_id)
         .order_by(TripHistory.changed_at.asc())
+        .all()
+    )
+    return history
+
+
+@router.get("/{trip_id}/location-history", response_model=list[TripLocationResponse])
+def get_trip_location_history(
+    trip_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if current_user.role == "driver":
+        if not trip.driver or trip.driver.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to view this trip's location history",
+            )
+
+    history = (
+        db.query(DriverLocationHistory)
+        .filter(DriverLocationHistory.trip_id == trip_id)
+        .order_by(DriverLocationHistory.recorded_at.asc())
         .all()
     )
     return history

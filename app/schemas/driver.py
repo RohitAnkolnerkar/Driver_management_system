@@ -20,6 +20,11 @@ class DriverCreate(BaseModel):
     username: Optional[str] = None
     password: Optional[str] = None
     email: Optional[str] = None
+    base_salary: Optional[float] = 0.0
+    commission_percentage: Optional[float] = 100.0
+    vehicle_type: Optional[str] = "cargo_truck"
+    odometer_km: Optional[float] = 0.0
+    vehicle_id: Optional[int] = None
 
 
 class DriverStatusUpdate(BaseModel):
@@ -33,6 +38,11 @@ class DriverUpdate(BaseModel):
     license_number: Optional[str] = None
     license_expiry: Optional[datetime] = None
     note: Optional[str] = None
+    base_salary: Optional[float] = None
+    commission_percentage: Optional[float] = None
+    vehicle_type: Optional[str] = None
+    odometer_km: Optional[float] = None
+    vehicle_id: Optional[int] = None
 
 
 class DriverLocationUpdate(BaseModel):
@@ -52,8 +62,21 @@ class DriverResponse(BaseModel):
     current_latitude: Optional[float] = None
     current_longitude: Optional[float] = None
     last_location_update: Optional[datetime] = None
+    base_salary: float = 0.0
+    commission_percentage: float = 100.0
+    vehicle_type: Optional[str] = "cargo_truck"
+    odometer_km: Optional[float] = 0.0
+    vehicle_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DriverLocationResponse(DriverResponse):
+    """Returned by POST /drivers/location — includes geofence arrival signal."""
+
+    near_destination: bool = False
+    active_trip_id: Optional[int] = None
+    active_trip_destination: Optional[str] = None
 
 
 class DriverCreateResponse(DriverResponse):
@@ -148,5 +171,51 @@ class DriverLeaderboardResponse(BaseModel):
     completed_trips: int
     total_earnings: float
     average_fare: float
+    total_distance_km: float
+    total_duration_minutes: int
+    average_speed_kmh: float
+    on_time_rate: float
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DriverPaymentResponse(BaseModel):
+    id: int
+    driver_id: int
+    year: int
+    month: int
+    base_salary_paid: float
+    commission_paid: float
+    bonus: float
+    deductions: float
+    total_paid: float
+    status: str
+    paid_at: Optional[datetime] = None
+    payment_method: Optional[str] = None
+    note: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DriverPaymentCreate(BaseModel):
+    driver_id: int
+    year: int
+    month: int
+    base_salary_paid: Optional[float] = None
+    commission_paid: Optional[float] = None
+    bonus: Optional[float] = 0.0
+    deductions: Optional[float] = 0.0
+    status: Optional[str] = "pending"
+    payment_method: Optional[str] = None
+    note: Optional[str] = None
+
+
+class DriverPaymentUpdate(BaseModel):
+    base_salary_paid: Optional[float] = None
+    commission_paid: Optional[float] = None
+    bonus: Optional[float] = None
+    deductions: Optional[float] = None
+    status: Optional[str] = None
+    payment_method: Optional[str] = None
+    note: Optional[str] = None

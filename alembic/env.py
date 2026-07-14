@@ -6,8 +6,10 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app.db import Base
 from app.models.driver import Driver
+from app.models.fuel import FuelLog
 from app.models.trip import Trip
 from app.models.user import User
+from app.models.vehicle import MaintenanceLog, Vehicle
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

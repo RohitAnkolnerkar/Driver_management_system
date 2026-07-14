@@ -21,15 +21,18 @@ class TripCreate(BaseModel):
     source_longitude: Optional[float] = None
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
+    vehicle_id: Optional[int] = None
 
 
 class AssignDriver(BaseModel):
     driver_id: int
+    vehicle_id: Optional[int] = None
 
 
 class BulkTripAssignmentRequest(BaseModel):
     trip_ids: list[int]
     driver_id: int
+    vehicle_id: Optional[int] = None
 
 
 class BulkTripAssignmentResponse(BaseModel):
@@ -61,6 +64,7 @@ class TripUpdate(BaseModel):
     source_longitude: Optional[float] = None
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
+    vehicle_id: Optional[int] = None
 
 
 class TripCancelRequest(BaseModel):
@@ -82,11 +86,15 @@ class TripResponse(BaseModel):
     driver_id: Optional[int] = None
     driver_name: Optional[str] = None
     driver_phone: Optional[str] = None
+    vehicle_id: Optional[int] = None
+    vehicle_license_plate: Optional[str] = None
     distance_km: Optional[float] = None
     duration_minutes: Optional[int] = None
+    duration_hours: Optional[float] = None
     estimated_fare: Optional[float] = None
     cost_per_trip: Optional[float] = None
     time_taken_minutes: Optional[int] = None
+    time_taken_hours: Optional[float] = None
     is_regular: bool = False
     scheduled_date: Optional[datetime] = None
     priority: str = "normal"
@@ -160,3 +168,11 @@ class TripFareEstimateResponse(BaseModel):
 
 class TripTransitionRequest(BaseModel):
     note: Optional[str] = None
+
+
+class TripLocationResponse(BaseModel):
+    latitude: float
+    longitude: float
+    recorded_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

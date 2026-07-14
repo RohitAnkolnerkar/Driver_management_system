@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -8,8 +9,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
 from app.db import get_db
-from app.models.driver import Driver, DriverAvailabilityHistory, DriverLocationHistory
-from app.models.trip import Trip, TripHistory
+from app.models.driver import (
+    Driver,
+    DriverAvailabilityHistory,
+    DriverLocationHistory,
+    DriverPayment,
+)
+from app.models.trip import Trip
 from app.schemas.driver import (
     DispatcherWorkloadSummaryResponse,
     DriverAvailabilityAnalyticsResponse,
@@ -19,7 +25,10 @@ from app.schemas.driver import (
     DriverDailyAvailabilityAnalyticsResponse,
     DriverEarningsResponse,
     DriverLeaderboardResponse,
+    DriverLocationResponse,
     DriverLocationUpdate,
+    DriverPaymentResponse,
+    DriverPaymentUpdate,
     DriverPerformanceResponse,
     DriverResponse,
     DriverStatus,
@@ -40,7 +49,22 @@ def record_driver_status_change(
     return history_entry
 
 
-@router.post("/location", response_model=DriverResponse)
+def validate_indian_license(license_num: str) -> str:
+    cleaned = license_num.strip().upper()
+    pattern = r"^[A-Z]{2}[ -]?[0-9]{2}[ -]?[0-9]{4}[ -]?[0-9]{7}$"
+    if not re.match(pattern, cleaned):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid Indian driving license format. "
+                "Must be in format SS-RR-YYYY-NNNNNNN "
+                "(e.g., MH-12-2018-0004567 or MH1220180004567)."
+            ),
+        )
+    return cleaned
+
+
+@router.post("/location", response_model=DriverLocationResponse)
 def update_driver_location(
     location_update: DriverLocationUpdate,
     db: Session = Depends(get_db),
@@ -72,10 +96,14 @@ def update_driver_location(
         .first()
     )
 
+    near_destination = False
+    active_trip_id = None
+    active_trip_destination = None
+
     if active_trip:
         history_entry.trip_id = active_trip.id
 
-        # Geofencing completion check
+        # Geofencing arrival check
         dest_lat = active_trip.destination_latitude
         dest_lng = active_trip.destination_longitude
         if dest_lat is not None and dest_lng is not None:
@@ -95,31 +123,37 @@ def update_driver_location(
             c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
             dist = 6371.0 * c  # distance in km
 
-            # If driver is within 100 meters (0.1 km) of destination, auto-complete trip
+            # Within 100 metres: signal the driver instead of auto-completing
             if dist < 0.1:
-                active_trip.status = "completed"
-                active_trip.end_time = datetime.utcnow()
-                driver.status = "available"
-
-                # Create availability history entry
-                status_history = DriverAvailabilityHistory(
-                    driver_id=driver.id,
-                    status="available",
-                    note="Auto-changed to available due to trip completion.",
-                )
-                db.add(status_history)
-
-                # Create trip history entry
-                trip_history = TripHistory(
-                    trip_id=active_trip.id,
-                    status="completed",
-                    note="Auto-completed via GPS Geofence arrival.",
-                )
-                db.add(trip_history)
+                near_destination = True
+                active_trip_id = active_trip.id
+                active_trip_destination = active_trip.destination
 
     db.commit()
     db.refresh(driver)
-    return driver
+
+    # Trigger WebSocket real-time update broadcast
+    from app.api.ws import broadcast_update
+
+    broadcast_update(
+        {
+            "type": "location_update",
+            "driver_id": driver.id,
+            "driver_name": driver.name,
+            "latitude": driver.current_latitude,
+            "longitude": driver.current_longitude,
+            "status": driver.status,
+            "active_trip_id": active_trip_id,
+            "near_destination": near_destination,
+        }
+    )
+
+    # Build response with arrival signal
+    response_data = DriverLocationResponse.model_validate(driver)
+    response_data.near_destination = near_destination
+    response_data.active_trip_id = active_trip_id
+    response_data.active_trip_destination = active_trip_destination
+    return response_data
 
 
 @router.post("/", response_model=DriverCreateResponse)
@@ -163,12 +197,21 @@ def create_driver(
                 status_code=400, detail="Username or email already registered"
             )
 
+    license_num = driver.license_number
+    if license_num:
+        license_num = validate_indian_license(license_num)
+
     driver_data = {
         "name": driver.name,
         "phone": driver.phone,
-        "license_number": driver.license_number,
+        "license_number": license_num,
         "license_expiry": driver.license_expiry,
         "user_id": user_id,
+        "base_salary": driver.base_salary,
+        "commission_percentage": driver.commission_percentage,
+        "vehicle_type": driver.vehicle_type,
+        "odometer_km": driver.odometer_km,
+        "vehicle_id": driver.vehicle_id,
     }
 
     db_driver = Driver(**driver_data)
@@ -189,6 +232,11 @@ def create_driver(
             "license_expiry": db_driver.license_expiry,
             "user_id": db_driver.user_id,
             "created_at": db_driver.created_at,
+            "base_salary": db_driver.base_salary,
+            "commission_percentage": db_driver.commission_percentage,
+            "vehicle_type": db_driver.vehicle_type,
+            "odometer_km": db_driver.odometer_km,
+            "vehicle_id": db_driver.vehicle_id,
             "username": (
                 driver.username if (driver.username and driver.password) else None
             ),
@@ -300,6 +348,10 @@ def get_driver_leaderboard(
             func.count(Trip.id).label("completed_trips"),
             func.coalesce(func.sum(Trip.estimated_fare), 0.0).label("total_earnings"),
             func.coalesce(func.avg(Trip.estimated_fare), 0.0).label("average_fare"),
+            func.coalesce(func.sum(Trip.distance_km), 0.0).label("total_distance_km"),
+            func.coalesce(func.sum(Trip.duration_minutes), 0).label(
+                "total_duration_minutes"
+            ),
         )
         .join(Trip, Trip.driver_id == Driver.id)
         .filter(Trip.status == "completed")
@@ -314,17 +366,59 @@ def get_driver_leaderboard(
         func.coalesce(func.sum(Trip.estimated_fare), 0.0).desc()
     )
     rows = query.all()
-    return [
-        {
-            "driver_id": row.driver_id,
-            "name": row.name,
-            "phone": row.phone,
-            "completed_trips": int(row.completed_trips),
-            "total_earnings": float(row.total_earnings),
-            "average_fare": round(float(row.average_fare), 2),
-        }
-        for row in rows
-    ]
+
+    results = []
+    for row in rows:
+        trips_list = db.query(Trip).filter(
+            Trip.driver_id == row.driver_id, Trip.status == "completed"
+        )
+        if completed_after:
+            trips_list = trips_list.filter(Trip.end_time >= completed_after)
+        if completed_before:
+            trips_list = trips_list.filter(Trip.end_time <= completed_before)
+
+        completed_trips_data = trips_list.all()
+
+        speed_violations_or_delays = 0
+        for t in completed_trips_data:
+            dist = t.distance_km or 0.0
+            dur = t.duration_minutes or 0
+            if dist > 0.0 and dur > 0:
+                speed_kmh = dist / (dur / 60.0)
+                # Flag speed under 20km/h (excessive traffic delay) or
+                # over 100km/h (speeding violation)
+                if speed_kmh < 20.0 or speed_kmh > 100.0:
+                    speed_violations_or_delays += 1
+
+        total_trips_count = len(completed_trips_data)
+        if total_trips_count > 0:
+            on_time_rate = max(
+                60.0, 100.0 - (speed_violations_or_delays / total_trips_count) * 40.0
+            )
+            average_speed_kmh = (
+                row.total_distance_km / (row.total_duration_minutes / 60.0)
+                if row.total_duration_minutes > 0
+                else 0.0
+            )
+        else:
+            on_time_rate = 100.0
+            average_speed_kmh = 0.0
+
+        results.append(
+            {
+                "driver_id": row.driver_id,
+                "name": row.name,
+                "phone": row.phone,
+                "completed_trips": int(row.completed_trips),
+                "total_earnings": float(row.total_earnings),
+                "average_fare": round(float(row.average_fare), 2),
+                "total_distance_km": round(float(row.total_distance_km), 2),
+                "total_duration_minutes": int(row.total_duration_minutes),
+                "average_speed_kmh": round(float(average_speed_kmh), 2),
+                "on_time_rate": round(float(on_time_rate), 2),
+            }
+        )
+    return results
 
 
 @router.get(
@@ -421,6 +515,191 @@ def get_my_driver_profile(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     return driver
+
+
+@router.get("/payments", response_model=list[DriverPaymentResponse])
+def list_payments(
+    driver_id: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    query = db.query(DriverPayment)
+    if driver_id is not None:
+        query = query.filter(DriverPayment.driver_id == driver_id)
+    if year is not None:
+        query = query.filter(DriverPayment.year == year)
+    if month is not None:
+        query = query.filter(DriverPayment.month == month)
+    if status is not None:
+        query = query.filter(DriverPayment.status == status)
+    return query.order_by(DriverPayment.year.desc(), DriverPayment.month.desc()).all()
+
+
+@router.get("/{driver_id}/payments", response_model=list[DriverPaymentResponse])
+def get_driver_payments(
+    driver_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if current_user.role == "driver" and (
+        not current_user.driver_profile or current_user.driver_profile.id != driver_id
+    ):
+        raise HTTPException(
+            status_code=403, detail="Not authorized to view payments for this driver"
+        )
+
+    return (
+        db.query(DriverPayment)
+        .filter(DriverPayment.driver_id == driver_id)
+        .order_by(DriverPayment.year.desc(), DriverPayment.month.desc())
+        .all()
+    )
+
+
+@router.post("/{driver_id}/payments/generate", response_model=DriverPaymentResponse)
+def generate_driver_payment(
+    driver_id: int,
+    year: int = Query(...),
+    month: int = Query(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    existing_payment = (
+        db.query(DriverPayment)
+        .filter(
+            DriverPayment.driver_id == driver_id,
+            DriverPayment.year == year,
+            DriverPayment.month == month,
+        )
+        .first()
+    )
+    if existing_payment:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Payment record for driver {driver.name} "
+                f"for {year}-{month:02d} already exists"
+            ),
+        )
+
+    import calendar
+
+    start_date = datetime(year, month, 1, 0, 0, 0)
+    _, last_day = calendar.monthrange(year, month)
+    end_date = datetime(year, month, last_day, 23, 59, 59, 999999)
+
+    trips_query = db.query(Trip).filter(
+        Trip.driver_id == driver_id,
+        Trip.status == "completed",
+        Trip.end_time >= start_date,
+        Trip.end_time <= end_date,
+    )
+    completed_trips = trips_query.all()
+    total_fares = sum(float(t.estimated_fare or 0.0) for t in completed_trips)
+
+    commission = total_fares * (driver.commission_percentage / 100.0)
+    base_salary_payout = driver.base_salary
+    total_paid = base_salary_payout + commission
+
+    db_payment = DriverPayment(
+        driver_id=driver_id,
+        year=year,
+        month=month,
+        base_salary_paid=base_salary_payout,
+        commission_paid=commission,
+        bonus=0.0,
+        deductions=0.0,
+        total_paid=total_paid,
+        status="pending",
+    )
+    db.add(db_payment)
+    try:
+        db.commit()
+        db.refresh(db_payment)
+        return db_payment
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail="Database integrity error during payment generation"
+        )
+
+
+@router.patch("/payments/{payment_id}", response_model=DriverPaymentResponse)
+def update_driver_payment(
+    payment_id: int,
+    payment_update: DriverPaymentUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    payment = db.query(DriverPayment).filter(DriverPayment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment record not found")
+
+    if payment_update.base_salary_paid is not None:
+        payment.base_salary_paid = payment_update.base_salary_paid
+    if payment_update.commission_paid is not None:
+        payment.commission_paid = payment_update.commission_paid
+    if payment_update.bonus is not None:
+        payment.bonus = payment_update.bonus
+    if payment_update.deductions is not None:
+        payment.deductions = payment_update.deductions
+    if payment_update.status is not None:
+        payment.status = payment_update.status
+        if payment_update.status == "paid":
+            payment.paid_at = datetime.utcnow()
+    if payment_update.payment_method is not None:
+        payment.payment_method = payment_update.payment_method
+    if payment_update.note is not None:
+        payment.note = payment_update.note
+
+    # Recalculate total_paid
+    payment.total_paid = (
+        payment.base_salary_paid
+        + payment.commission_paid
+        + payment.bonus
+        - payment.deductions
+    )
+
+    try:
+        db.commit()
+        db.refresh(payment)
+        return payment
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail="Database integrity error during payment update"
+        )
+
+
+@router.delete("/payments/{payment_id}")
+def delete_driver_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin")),
+):
+    payment = db.query(DriverPayment).filter(DriverPayment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment record not found")
+
+    if payment.status == "paid":
+        raise HTTPException(
+            status_code=400, detail="Cannot delete a paid payment record"
+        )
+
+    db.delete(payment)
+    db.commit()
+    return {"message": "Payment record deleted successfully"}
 
 
 @router.get("/{driver_id}", response_model=DriverResponse)
@@ -598,9 +877,19 @@ def update_driver(
         note = driver_update.note if driver_update.note else "status updated"
         record_driver_status_change(db, driver.id, driver.status, note)
     if driver_update.license_number is not None:
-        driver.license_number = driver_update.license_number
+        driver.license_number = validate_indian_license(driver_update.license_number)
     if driver_update.license_expiry is not None:
         driver.license_expiry = driver_update.license_expiry
+    if driver_update.base_salary is not None:
+        driver.base_salary = driver_update.base_salary
+    if driver_update.commission_percentage is not None:
+        driver.commission_percentage = driver_update.commission_percentage
+    if driver_update.vehicle_type is not None:
+        driver.vehicle_type = driver_update.vehicle_type
+    if driver_update.odometer_km is not None:
+        driver.odometer_km = driver_update.odometer_km
+    if "vehicle_id" in driver_update.model_fields_set:
+        driver.vehicle_id = driver_update.vehicle_id
 
     try:
         db.commit()
@@ -856,3 +1145,124 @@ def get_driver_trip_history(
     trips = query.order_by(Trip.created_at.desc()).offset(offset).limit(limit).all()
 
     return trips
+
+
+@router.get("/payments/export")
+def export_driver_payments(
+    driver_id: Optional[int] = Query(None),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    query = db.query(DriverPayment)
+    if driver_id is not None:
+        query = query.filter(DriverPayment.driver_id == driver_id)
+    if year is not None:
+        query = query.filter(DriverPayment.year == year)
+    if month is not None:
+        query = query.filter(DriverPayment.month == month)
+    if status is not None and status.strip():
+        query = query.filter(DriverPayment.status == status)
+
+    payments = query.order_by(
+        DriverPayment.year.desc(), DriverPayment.month.desc()
+    ).all()
+
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow(
+        [
+            "Payment ID",
+            "Driver ID",
+            "Driver Name",
+            "Driver Phone",
+            "Year",
+            "Month",
+            "Base Salary Paid",
+            "Commission Paid",
+            "Bonus",
+            "Deductions",
+            "Total Paid",
+            "Status",
+            "Processed At",
+            "Payment Method",
+            "Notes",
+        ]
+    )
+
+    for p in payments:
+        driver = db.query(Driver).filter(Driver.id == p.driver_id).first()
+        driver_name = driver.name if driver else "Unknown"
+        driver_phone = driver.phone if driver else "Unknown"
+        writer.writerow(
+            [
+                p.id,
+                p.driver_id,
+                driver_name,
+                driver_phone,
+                p.year,
+                p.month,
+                p.base_salary_paid,
+                p.commission_paid,
+                p.bonus,
+                p.deductions,
+                p.total_paid,
+                p.status,
+                p.paid_at.isoformat() if p.paid_at else "N/A",
+                p.payment_method or "N/A",
+                p.note or "",
+            ]
+        )
+
+    output.seek(0)
+
+    headers = {"Content-Disposition": "attachment; filename=driver_payments_export.csv"}
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers=headers,
+    )
+
+
+@router.get("/payments/{payment_id}/invoice")
+def get_payment_invoice(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    payment = db.query(DriverPayment).filter(DriverPayment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment record not found")
+
+    # Authorize: admin, dispatcher, or the specific driver who owns the payment profile
+    if current_user.role == "driver":
+        driver = db.query(Driver).filter(Driver.user_id == current_user.id).first()
+        if not driver or payment.driver_id != driver.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to view invoice for this payment",
+            )
+    else:
+        # admins and dispatchers can see everything, let's load the driver info
+        driver = db.query(Driver).filter(Driver.id == payment.driver_id).first()
+
+    if not driver:
+        raise HTTPException(status_code=404, detail="Associated driver not found")
+
+    from fastapi.responses import StreamingResponse
+
+    from app.core.pdf import generate_payout_pdf
+
+    pdf_buffer = generate_payout_pdf(payment, driver)
+
+    headers = {"Content-Disposition": f"attachment; filename=invoice_{payment_id}.pdf"}
+    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)

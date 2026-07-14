@@ -11,6 +11,7 @@ class Trip(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=True)
+    vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=True)
 
     source = Column(String, nullable=False)
     destination = Column(String, nullable=False)
@@ -23,6 +24,8 @@ class Trip(Base):
     duration_minutes = Column(Integer, nullable=True)
     estimated_fare = Column(Float, nullable=True)
     cancel_reason = Column(String, nullable=True)
+    fuel_consumed_liters = Column(Float, nullable=True)
+    carbon_emissions_kg = Column(Float, nullable=True)
     source_company = Column(String, nullable=True)
     destination_company = Column(String, nullable=True)
     is_regular = Column(Boolean, nullable=False, default=False)
@@ -39,12 +42,17 @@ class Trip(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     driver = relationship("Driver", backref="trips")
+    vehicle = relationship("Vehicle", backref="trips")
     history = relationship(
         "TripHistory",
         back_populates="trip",
         cascade="all, delete-orphan",
         order_by="TripHistory.changed_at.asc()",
     )
+
+    @property
+    def vehicle_license_plate(self):
+        return self.vehicle.license_plate if self.vehicle else None
 
     @property
     def driver_name(self):
@@ -65,6 +73,19 @@ class Trip(Base):
         if self.start_time is not None and self.end_time is not None:
             return int((self.end_time - self.start_time).total_seconds() / 60)
         return None
+
+    @property
+    def duration_hours(self):
+        return (
+            round(self.duration_minutes / 60.0, 2)
+            if self.duration_minutes is not None
+            else None
+        )
+
+    @property
+    def time_taken_hours(self):
+        tt_min = self.time_taken_minutes
+        return round(tt_min / 60.0, 2) if tt_min is not None else None
 
 
 class TripHistory(Base):

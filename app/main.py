@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app.api import auth, driver, trip, users
+from app.api import auth, driver, fuel, trip, users, vehicle, ws
 from app.config import settings
 
 app = FastAPI()
@@ -23,6 +23,9 @@ app.include_router(driver.router)
 app.include_router(trip.router)
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(ws.router)
+app.include_router(fuel.router)
+app.include_router(vehicle.router)
 
 
 @app.get("/")
