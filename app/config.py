@@ -37,6 +37,25 @@ class Settings:
     TWILIO_ACCOUNT_SID: str | None = os.getenv("TWILIO_ACCOUNT_SID")
     TWILIO_AUTH_TOKEN: str | None = os.getenv("TWILIO_AUTH_TOKEN")
     TWILIO_FROM_NUMBER: str | None = os.getenv("TWILIO_FROM_NUMBER")
+    SPEED_LIMIT_THRESHOLD: float = float(os.getenv("SPEED_LIMIT_THRESHOLD", "60.0"))
+    RECONCILE_GPS_RATIO_LIMIT: float = float(
+        os.getenv("RECONCILE_GPS_RATIO_LIMIT", "1.20")
+    )
+    RECONCILE_ODO_GPS_DIFF_LIMIT: float = float(
+        os.getenv("RECONCILE_ODO_GPS_DIFF_LIMIT", "5.0")
+    )
+    RECONCILE_ODO_GPS_PCT_LIMIT: float = float(
+        os.getenv("RECONCILE_ODO_GPS_PCT_LIMIT", "0.05")
+    )
+    RECONCILE_ODO_PLAN_DIFF_LIMIT: float = float(
+        os.getenv("RECONCILE_ODO_PLAN_DIFF_LIMIT", "10.0")
+    )
+    RECONCILE_ODO_PLAN_PCT_LIMIT: float = float(
+        os.getenv("RECONCILE_ODO_PLAN_PCT_LIMIT", "0.10")
+    )
+    MANDATORY_SAFETY_INSPECTION: bool = (
+        os.getenv("MANDATORY_SAFETY_INSPECTION", "true").lower() == "true"
+    )
 
     @property
     def cors_origins(self) -> List[str]:

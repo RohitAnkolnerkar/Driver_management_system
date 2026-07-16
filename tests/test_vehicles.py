@@ -206,10 +206,30 @@ def test_driver_assignment_and_odometer_sync(client, db_session):
     driver = response.json()
     assert driver["vehicle_id"] == vehicle["id"]
 
+    # Create a trip for fuel logging
+    trip_response = client.post(
+        "/trips/",
+        json={
+            "source": "Mumbai",
+            "destination": "Pune",
+            "distance_km": 150.0,
+            "duration_minutes": 180,
+            "estimated_fare": 5000.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert trip_response.status_code == 200
+    trip_id = trip_response.json()["id"]
+
     # 1. Test Fuel Log updates assigned vehicle's odometer
     response = client.post(
         "/fuel/fuel-logs",
-        json={"liters_refueled": 40.0, "cost": 3600.0, "odometer": 5200.0},
+        json={
+            "liters_refueled": 40.0,
+            "cost": 3600.0,
+            "odometer": 5200.0,
+            "trip_id": trip_id,
+        },
         headers={"Authorization": f"Bearer {driver_token}"},
     )
     assert response.status_code == 200

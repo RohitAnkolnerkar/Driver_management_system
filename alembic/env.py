@@ -7,6 +7,7 @@ from alembic import context
 from app.db import Base
 from app.models.driver import Driver
 from app.models.fuel import FuelLog
+from app.models.inspection import PreTripInspection
 from app.models.trip import Trip
 from app.models.user import User
 from app.models.vehicle import MaintenanceLog, Vehicle

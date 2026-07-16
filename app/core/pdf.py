@@ -6,6 +6,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from app.core.time_utils import get_now_ist_naive
+
 
 def generate_payout_pdf(payment, driver) -> io.BytesIO:
     """
@@ -239,10 +241,10 @@ def generate_payout_pdf(payment, driver) -> io.BytesIO:
 
     # --- SIGN-OFF FOOTER ---
     elements.append(Spacer(1, 30))
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_now_ist_naive().strftime("%Y-%m-%d %H:%M:%S")
     footer_text = (
         f"This statement was generated electronically by FleetFlow System "
-        f"on {now_str} UTC. No signature required."
+        f"on {now_str} IST. No signature required."
     )
     elements.append(
         Paragraph(
@@ -338,7 +340,7 @@ def generate_trips_manifest_pdf(trips) -> io.BytesIO:
         Paragraph(
             (
                 f"Trips Manifest Report — Generated on "
-                f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                f"{get_now_ist_naive().strftime('%Y-%m-%d %H:%M')}"
             ),
             subtitle_style,
         )

@@ -1,13 +1,14 @@
-from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_roles
+from app.core.time_utils import get_now_ist_naive
 from app.models.driver import Driver
 from app.models.vehicle import MaintenanceLog, Vehicle
 from app.schemas.vehicle import (
+    MaintenanceLogComplete,
     MaintenanceLogCreate,
     MaintenanceLogResponse,
     VehicleCreate,
@@ -98,6 +99,105 @@ def create_vehicle(
     db.commit()
     db.refresh(db_vehicle)
     return make_vehicle_response(db_vehicle, db)
+
+
+@router.get("/utilization-analytics")
+def get_vehicles_utilization_analytics(
+    period_days: int = 30,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    from datetime import timedelta
+
+    from app.models.trip import Trip
+
+    now = get_now_ist_naive()
+    start_date = now - timedelta(days=period_days)
+    total_hours = float(period_days * 24)
+
+    vehicles = db.query(Vehicle).all()
+    results = []
+
+    for v in vehicles:
+        trips = (
+            db.query(Trip)
+            .filter(
+                Trip.vehicle_id == v.id,
+                Trip.status.in_(["started", "completed"]),
+                Trip.start_time >= start_date,
+            )
+            .all()
+        )
+
+        active_hours = 0.0
+        mileage_accumulated = 0.0
+
+        for trip in trips:
+            t_start = trip.start_time
+            t_end = trip.end_time or now
+
+            i_start = max(t_start, start_date)  # type: ignore
+            i_end = min(t_end, now)  # type: ignore
+
+            if i_start < i_end:
+                active_hours += (i_end - i_start).total_seconds() / 3600.0
+
+            if trip.status == "completed" and trip.distance_km:
+                mileage_accumulated += float(trip.distance_km)
+
+        m_logs = (
+            db.query(MaintenanceLog)
+            .filter(
+                MaintenanceLog.vehicle_id == v.id,
+                MaintenanceLog.service_date >= start_date,
+            )
+            .all()
+        )
+
+        downtime_hours = 0.0
+        for log in m_logs:
+            l_start = log.service_date
+            l_end = log.completed_at or now
+
+            i_start = max(l_start, start_date)  # type: ignore
+            i_end = min(l_end, now)  # type: ignore
+
+            if i_start < i_end:
+                downtime_hours += (i_end - i_start).total_seconds() / 3600.0
+
+        idle_hours = max(0.0, total_hours - active_hours - downtime_hours)
+
+        utilization_rate = 0.0
+        if total_hours > 0:
+            utilization_rate = round((active_hours / total_hours) * 100.0, 1)
+
+        high_threshold = 2000.0 * (period_days / 30.0)
+        medium_threshold = 800.0 * (period_days / 30.0)
+
+        if mileage_accumulated >= high_threshold:
+            wear_level = "high"
+        elif mileage_accumulated >= medium_threshold:
+            wear_level = "medium"
+        else:
+            wear_level = "low"
+
+        results.append(
+            {
+                "vehicle_id": v.id,
+                "make": v.make,
+                "model": v.model,
+                "license_plate": v.license_plate,
+                "status": v.status,
+                "active_hours": round(active_hours, 1),
+                "downtime_hours": round(downtime_hours, 1),
+                "idle_hours": round(idle_hours, 1),
+                "utilization_rate": utilization_rate,
+                "mileage_accumulated": round(mileage_accumulated, 1),
+                "wear_alert_level": wear_level,
+            }
+        )
+
+    return results
 
 
 @router.get("/{vehicle_id}", response_model=VehicleResponse)
@@ -203,30 +303,69 @@ def create_maintenance_log(
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
 
-    # Auto-adjust vehicle status if it's currently "maintenance" or log changes
-    # Ensure vehicle odometer increases if service odometer is higher
     if log_in.odometer_at_service > vehicle.odometer_km:
         vehicle.odometer_km = log_in.odometer_at_service
 
-    # Default service date to now if not provided
-    s_date = log_in.service_date or datetime.utcnow()
+    s_date = log_in.service_date or get_now_ist_naive()
+    c_date = log_in.completed_at
 
     db_log = MaintenanceLog(
         vehicle_id=vehicle_id,
         service_type=log_in.service_type,
         description=log_in.description,
-        cost=log_in.cost,
+        cost=log_in.cost or 0.0,
         odometer_at_service=log_in.odometer_at_service,
         service_date=s_date,
+        completed_at=c_date,
         next_service_due_odometer=log_in.next_service_due_odometer,
     )
 
-    # If vehicle status was "maintenance", logging a task might mark it back as active
-    # (unless it's set as inactive)
-    if vehicle.status == "maintenance":
+    if not c_date:
+        vehicle.status = "maintenance"
+    else:
         vehicle.status = "active"
 
     db.add(db_log)
     db.commit()
     db.refresh(db_log)
     return db_log
+
+
+@router.patch("/maintenance/{log_id}/complete", response_model=MaintenanceLogResponse)
+def complete_maintenance_log(
+    log_id: int,
+    complete_in: MaintenanceLogComplete,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    log = db.query(MaintenanceLog).filter(MaintenanceLog.id == log_id).first()
+    if not log:
+        raise HTTPException(status_code=404, detail="Maintenance log not found")
+
+    log.completed_at = get_now_ist_naive()
+    log.cost = complete_in.cost
+    if complete_in.description:
+        log.description = complete_in.description
+    if complete_in.next_service_due_odometer is not None:
+        log.next_service_due_odometer = complete_in.next_service_due_odometer
+
+    vehicle = db.query(Vehicle).filter(Vehicle.id == log.vehicle_id).first()
+    if vehicle:
+        open_logs = (
+            db.query(MaintenanceLog)
+            .filter(
+                MaintenanceLog.vehicle_id == vehicle.id,
+                MaintenanceLog.completed_at.is_(None),
+                MaintenanceLog.id != log.id,
+            )
+            .count()
+        )
+        if open_logs == 0:
+            vehicle.status = "active"
+
+        if log.odometer_at_service > vehicle.odometer_km:
+            vehicle.odometer_km = log.odometer_at_service
+
+    db.commit()
+    db.refresh(log)
+    return log

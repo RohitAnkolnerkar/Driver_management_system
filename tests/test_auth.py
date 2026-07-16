@@ -159,3 +159,61 @@ def test_user_registration_missing_fields(client):
     )
     assert response.status_code == 422
     assert any(error["loc"][-1] == "password" for error in response.json()["detail"])
+
+
+def test_driver_signup_creates_profile(client, db_session):
+    from app.models.driver import Driver
+
+    # 1. Driver signup with a specific phone number
+    response = client.post(
+        "/users/",
+        json={
+            "username": "driver_signup_test1",
+            "email": "driver_test1@example.com",
+            "password": "secret123",
+            "role": "driver",
+            "phone": "9998887776",
+        },
+    )
+    assert response.status_code == 200
+    user_id = response.json()["id"]
+
+    # Verify driver profile exists in DB
+    driver = db_session.query(Driver).filter(Driver.user_id == user_id).first()
+    assert driver is not None
+    assert driver.name == "driver_signup_test1"
+    assert driver.phone == "9998887776"
+    assert driver.status == "available"
+
+    # 2. Driver signup without a phone number (generates temporary one)
+    response_no_phone = client.post(
+        "/users/",
+        json={
+            "username": "driver_signup_test2",
+            "email": "driver_test2@example.com",
+            "password": "secret123",
+            "role": "driver",
+        },
+    )
+    assert response_no_phone.status_code == 200
+    user_id_no_phone = response_no_phone.json()["id"]
+
+    driver_no_phone = (
+        db_session.query(Driver).filter(Driver.user_id == user_id_no_phone).first()
+    )
+    assert driver_no_phone is not None
+    assert driver_no_phone.phone == f"TEMP-{user_id_no_phone}"
+
+    # 3. Duplicate phone registration fails
+    response_duplicate_phone = client.post(
+        "/users/",
+        json={
+            "username": "driver_signup_test3",
+            "email": "driver_test3@example.com",
+            "password": "secret123",
+            "role": "driver",
+            "phone": "9998887776",  # duplicate of the first one
+        },
+    )
+    assert response_duplicate_phone.status_code == 400
+    assert "already exists" in response_duplicate_phone.json()["detail"].lower()

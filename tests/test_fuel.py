@@ -47,6 +47,20 @@ def test_fuel_logging_odometer_update_and_fraud_audits(client, db_session):
     assert driver_res.status_code == 200
     driver_data = driver_res.json()
 
+    # Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Terminal Alpha",
+            "destination": "Warehouse Beta",
+            "distance_km": 400.0,
+            "duration_minutes": 300,
+        },
+        headers=disp_headers,
+    )
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
     # Log in as driver
     driver_token = client.post(
         "/auth/token",
@@ -62,6 +76,7 @@ def test_fuel_logging_odometer_update_and_fraud_audits(client, db_session):
             "liters_refueled": 50.0,
             "cost": 4500.0,
             "odometer": 1400.0,
+            "trip_id": trip_id,
         },
         headers=driver_headers,
     )
@@ -82,6 +97,7 @@ def test_fuel_logging_odometer_update_and_fraud_audits(client, db_session):
             "liters_refueled": 200.0,
             "cost": 18000.0,
             "odometer": 1500.0,
+            "trip_id": trip_id,
         },
         headers=driver_headers,
     )
@@ -98,6 +114,7 @@ def test_fuel_logging_odometer_update_and_fraud_audits(client, db_session):
             "liters_refueled": 10.0,
             "cost": 900.0,
             "odometer": 1300.0,
+            "trip_id": trip_id,
         },
         headers=driver_headers,
     )
@@ -115,6 +132,7 @@ def test_fuel_logging_odometer_update_and_fraud_audits(client, db_session):
             "liters_refueled": 80.0,
             "cost": 7200.0,
             "odometer": 1600.0,
+            "trip_id": trip_id,
         },
         headers=driver_headers,
     )
@@ -189,3 +207,232 @@ def test_get_fleet_fuel_analytics(client, db_session):
     assert data["total_fuel_cost"] == 0.0
     assert data["total_liters"] == 0.0
     assert data["active_fraud_alerts_count"] == 0
+
+
+def test_update_fuel_log(client, db_session):
+    dispatcher_token = create_user_helper(client, "dispatcher_updater", "dispatcher")
+    disp_headers = {"Authorization": f"Bearer {dispatcher_token}"}
+
+    # Register driver
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Updater Driver",
+            "phone": "9998884444",
+            "license_number": "DL-12-2018-7777777",
+            "license_expiry": "2030-12-31T00:00:00",
+            "username": "updater_driver",
+            "password": "updater_password",
+            "vehicle_type": "cargo_truck",
+            "odometer_km": 1000.0,
+        },
+        headers=disp_headers,
+    )
+    assert driver_res.status_code == 200
+
+    # Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Terminal Alpha",
+            "destination": "Warehouse Beta",
+            "distance_km": 400.0,
+            "duration_minutes": 300,
+        },
+        headers=disp_headers,
+    )
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    driver_token = client.post(
+        "/auth/token",
+        data={"username": "updater_driver", "password": "updater_password"},
+    ).json()["access_token"]
+    driver_headers = {"Authorization": f"Bearer {driver_token}"}
+
+    # Create fuel log (flagged as fraud due to overflow)
+    log_res = client.post(
+        "/fuel/fuel-logs",
+        json={
+            "liters_refueled": 200.0,
+            "cost": 18000.0,
+            "odometer": 1500.0,
+            "trip_id": trip_id,
+        },
+        headers=driver_headers,
+    )
+    assert log_res.status_code == 200
+    log_id = log_res.json()["id"]
+    assert log_res.json()["is_flagged_fraud"] is True
+
+    # Dispatcher updates the log to clear the fraud flag and adjust liters
+    update_res = client.patch(
+        f"/fuel/fuel-logs/{log_id}",
+        json={
+            "liters_refueled": 120.0,
+            "is_flagged_fraud": False,
+            "fraud_reason": "Cleared manually by dispatcher after review",
+        },
+        headers=disp_headers,
+    )
+    assert update_res.status_code == 200
+    updated_data = update_res.json()
+    assert updated_data["liters_refueled"] == 120.0
+    assert updated_data["is_flagged_fraud"] is False
+    assert updated_data["fraud_reason"] == "Cleared manually by dispatcher after review"
+
+    # Driver role attempt to update should fail
+    fail_res = client.patch(
+        f"/fuel/fuel-logs/{log_id}",
+        json={"is_flagged_fraud": True},
+        headers=driver_headers,
+    )
+    assert fail_res.status_code == 403
+
+
+def test_dispatcher_creates_fuel_log_on_behalf_of_driver(client, db_session):
+    dispatcher_token = create_user_helper(client, "dispatcher_creator", "dispatcher")
+    disp_headers = {"Authorization": f"Bearer {dispatcher_token}"}
+
+    # Register driver
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Behalf Driver",
+            "phone": "9998885555",
+            "license_number": "DL-12-2018-8888888",
+            "license_expiry": "2030-12-31T00:00:00",
+            "username": "behalf_driver",
+            "password": "behalf_password",
+            "vehicle_type": "cargo_truck",
+            "odometer_km": 1000.0,
+        },
+        headers=disp_headers,
+    )
+    assert driver_res.status_code == 200
+    driver_id = driver_res.json()["id"]
+
+    # Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Terminal Alpha",
+            "destination": "Warehouse Beta",
+            "distance_km": 400.0,
+            "duration_minutes": 300,
+        },
+        headers=disp_headers,
+    )
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    # Dispatcher submits fuel log specifying the driver_id
+    res = client.post(
+        "/fuel/fuel-logs",
+        json={
+            "driver_id": driver_id,
+            "liters_refueled": 50.0,
+            "cost": 4500.0,
+            "odometer": 1400.0,
+            "trip_id": trip_id,
+        },
+        headers=disp_headers,
+    )
+    assert res.status_code == 200
+    log = res.json()
+    assert log["driver_id"] == driver_id
+    assert log["is_flagged_fraud"] is False
+
+    # Check driver odometer is updated
+    db_driver = db_session.query(Driver).filter(Driver.id == driver_id).first()
+    assert db_driver.odometer_km == 1400.0
+
+    # Dispatcher submits without driver_id should return 400 Bad Request
+    fail_res = client.post(
+        "/fuel/fuel-logs",
+        json={
+            "liters_refueled": 50.0,
+            "cost": 4500.0,
+            "odometer": 1500.0,
+            "trip_id": trip_id,
+        },
+        headers=disp_headers,
+    )
+    assert fail_res.status_code == 400
+    assert "driver_id is required" in fail_res.json()["detail"]
+
+
+def test_get_diesel_rate(client):
+    dispatcher_token = create_user_helper(client, "dispatcher_diesel", "dispatcher")
+    disp_headers = {"Authorization": f"Bearer {dispatcher_token}"}
+
+    res = client.get("/fuel/diesel-rate", headers=disp_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "national_average" in data
+    assert "cities" in data
+    assert isinstance(data["national_average"], (int, float))
+    assert isinstance(data["cities"], dict)
+    assert len(data["cities"]) > 0
+    # Also verify some standard cities are in it, like Mumbai
+    assert "Mumbai" in data["cities"]
+
+
+def test_fuel_card_cost_mismatch_audit(client, db_session):
+    dispatcher_token = create_user_helper(client, "dispatcher_cost_audit", "dispatcher")
+    disp_headers = {"Authorization": f"Bearer {dispatcher_token}"}
+
+    # Register driver
+    driver_res = client.post(
+        "/drivers/",
+        json={
+            "name": "Audit Driver",
+            "phone": "9998881234",
+            "license_number": "DL-12-2018-1234567",
+            "license_expiry": "2030-12-31T00:00:00",
+            "username": "audit_driver_cost",
+            "password": "audit_password",
+            "vehicle_type": "cargo_truck",
+            "odometer_km": 1000.0,
+        },
+        headers=disp_headers,
+    )
+    assert driver_res.status_code == 200
+
+    # Create a trip
+    trip_res = client.post(
+        "/trips/",
+        json={
+            "source": "Terminal Alpha",
+            "destination": "Warehouse Beta",
+            "distance_km": 400.0,
+            "duration_minutes": 300,
+        },
+        headers=disp_headers,
+    )
+    assert trip_res.status_code == 200
+    trip_id = trip_res.json()["id"]
+
+    driver_token = client.post(
+        "/auth/token",
+        data={"username": "audit_driver_cost", "password": "audit_password"},
+    ).json()["access_token"]
+    driver_headers = {"Authorization": f"Bearer {driver_token}"}
+
+    # Refuel: 50 Liters. Expected cost around 50 * 97.83 = 4891.50
+    # Let's log a highly mismatched cost: 8000.0 (tampering / excessive markup)
+    res_tampered = client.post(
+        "/fuel/fuel-logs",
+        json={
+            "liters_refueled": 50.0,
+            "cost": 8000.0,
+            "odometer": 1400.0,
+            "trip_id": trip_id,
+        },
+        headers=driver_headers,
+    )
+    assert res_tampered.status_code == 200
+    log = res_tampered.json()
+    assert log["is_flagged_fraud"] is True
+    assert "Receipt cost" in log["fraud_reason"]
+    assert "does not match expected local rate" in log["fraud_reason"]

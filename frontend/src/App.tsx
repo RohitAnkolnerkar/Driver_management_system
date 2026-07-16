@@ -59,9 +59,10 @@ export default function App() {
   const [signUpEmail, setSignUpEmail] = useState('');
   const [signUpPassword, setSignUpPassword] = useState('');
   const [signUpRole, setSignUpRole] = useState('dispatcher');
+  const [signUpPhone, setSignUpPhone] = useState('');
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'trips' | 'drivers' | 'alerts' | 'profile' | 'map' | 'performance' | 'payments' | 'vehicles' | 'fuel'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'trips' | 'drivers' | 'alerts' | 'profile' | 'map' | 'performance' | 'payments' | 'vehicles' | 'fuel' | 'reconciliation'>('dashboard');
 
   // Payments State
   const [payments, setPayments] = useState<any[]>([]);
@@ -83,12 +84,24 @@ export default function App() {
   const [dashboardStats, setDashboardStats] = useState<any>(null);
   const [myDriverProfile, setMyDriverProfile] = useState<any>(null);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [scorecards, setScorecards] = useState<any[]>([]);
+  const [scorecardYear, setScorecardYear] = useState<number>(new Date().getFullYear());
+  const [scorecardMonth, setScorecardMonth] = useState<number>(new Date().getMonth() + 1);
+  const [scorecardLoading, setScorecardLoading] = useState(false);
 
   // Loading & Action states
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
   // Modals & Forms State
+  const [editingFuelLog, setEditingFuelLog] = useState<any | null>(null);
+  const [dispatcherFuelLogData, setDispatcherFuelLogData] = useState({
+    driver_id: '',
+    liters_refueled: '',
+    cost: '',
+    odometer: '',
+    trip_id: '',
+  });
   const [showCreateTrip, setShowCreateTrip] = useState(false);
   const [newTripData, setNewTripData] = useState({
     source: '',
@@ -122,9 +135,12 @@ export default function App() {
   const [assigningTripId, setAssigningTripId] = useState<number | null>(null);
   const [assignDriverId, setAssignDriverId] = useState('');
   const [assignVehicleId, setAssignVehicleId] = useState('');
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [loadingRecs, setLoadingRecs] = useState(false);
 
   const [transitioningTrip, setTransitioningTrip] = useState<{ id: number; action: 'start' | 'complete' } | null>(null);
   const [transitionNote, setTransitionNote] = useState('');
+  const [transitionOdometer, setTransitionOdometer] = useState('');
 
   const [viewingTripHistory, setViewingTripHistory] = useState<number | null>(null);
   const [tripHistoryLogs, setTripHistoryLogs] = useState<any[]>([]);
@@ -148,6 +164,15 @@ export default function App() {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
+  // Safety inspection states
+  const [showInspectionTripId, setShowInspectionTripId] = useState<number | null>(null);
+  const [inspectionBrakes, setInspectionBrakes] = useState(true);
+  const [inspectionTires, setInspectionTires] = useState(true);
+  const [inspectionLights, setInspectionLights] = useState(true);
+  const [inspectionSteering, setInspectionSteering] = useState(true);
+  const [inspectionFluids, setInspectionFluids] = useState(true);
+  const [inspectionNotes, setInspectionNotes] = useState('');
+
   const [profileUpdates, setProfileUpdates] = useState({
     username: '',
     email: '',
@@ -164,14 +189,29 @@ export default function App() {
   const [playbackIndex, setPlaybackIndex] = useState<number>(0);
   const [isPlaybackPlaying, setIsPlaybackPlaying] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
-  const [performanceSubTab, setPerformanceSubTab] = useState<'leaderboard' | 'analytics'>('leaderboard');
+  const [performanceSubTab, setPerformanceSubTab] = useState<'leaderboard' | 'analytics' | 'scorecard'>('leaderboard');
 
   // Fuel Logging States
   const [fuelRefueled, setFuelRefueled] = useState('');
   const [fuelCost, setFuelCost] = useState('');
   const [fuelOdometer, setFuelOdometer] = useState('');
+  const [fuelTripId, setFuelTripId] = useState('');
   const [fuelLogs, setFuelLogs] = useState<any[]>([]);
   const [fuelAnalytics, setFuelAnalytics] = useState<any | null>(null);
+  const [isPersonalTwoWheeler, setIsPersonalTwoWheeler] = useState(false);
+  const [dispatcherPersonalTwoWheeler, setDispatcherPersonalTwoWheeler] = useState(false);
+
+  // Workshop & Utilization States
+  const [completingMaintenanceLog, setCompletingMaintenanceLog] = useState<any | null>(null);
+  const [completeMaintenanceData, setCompleteMaintenanceData] = useState({ cost: '0', description: '', next_service_due_odometer: '' });
+  const [utilizationAnalytics, setUtilizationAnalytics] = useState<any[]>([]);
+  const [utilizationPeriod, setUtilizationPeriod] = useState<number>(30);
+  const [utilizationLoading, setUtilizationLoading] = useState<boolean>(false);
+  const [vehiclesSubTab, setVehiclesSubTab] = useState<'registry' | 'utilization'>('registry');
+  const [dieselRates, setDieselRates] = useState<any>(null);
+  const [selectedDieselCity, setSelectedDieselCity] = useState('Mumbai');
+  const [dispatcherDieselCity, setDispatcherDieselCity] = useState('Mumbai');
+  const [editDieselCity, setEditDieselCity] = useState('Mumbai');
 
   // Vehicle & Maintenance States
   const [vehicles, setVehicles] = useState<any[]>([]);
@@ -314,10 +354,62 @@ export default function App() {
     }
   };
 
+  const handleCompleteMaintenanceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!completingMaintenanceLog) return;
+    try {
+      await apiFetch(`/vehicles/maintenance/${completingMaintenanceLog.id}/complete`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          cost: parseFloat(completeMaintenanceData.cost || '0'),
+          description: completeMaintenanceData.description || null,
+          next_service_due_odometer: completeMaintenanceData.next_service_due_odometer ? parseFloat(completeMaintenanceData.next_service_due_odometer) : null
+        })
+      });
+      showSuccess("Maintenance completed and vehicle returned to service!");
+      setCompletingMaintenanceLog(null);
+      setCompleteMaintenanceData({ cost: '0', description: '', next_service_due_odometer: '' });
+      fetchVehicles();
+      loadData();
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
+  const fetchUtilizationAnalytics = async () => {
+    if (!currentUser) return;
+    if (currentUser.role !== 'admin' && currentUser.role !== 'dispatcher') return;
+    setUtilizationLoading(true);
+    try {
+      const data = await apiFetch(`/vehicles/utilization-analytics?period_days=${utilizationPeriod}`);
+      setUtilizationAnalytics(data);
+    } catch (err: any) {
+      console.error("Failed to fetch utilization analytics:", err);
+    } finally {
+      setUtilizationLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'vehicles' && (currentUser?.role === 'admin' || currentUser?.role === 'dispatcher')) {
+      fetchUtilizationAnalytics();
+    }
+  }, [activeTab, utilizationPeriod, currentUser]);
+
+  const fetchDieselRates = async () => {
+    try {
+      const data = await apiFetch('/fuel/diesel-rate');
+      setDieselRates(data);
+    } catch (err: any) {
+      console.error("Failed to fetch diesel rates:", err);
+    }
+  };
+
   const fetchFuelLogs = async () => {
     try {
       const logs = await apiFetch('/fuel/fuel-logs');
       setFuelLogs(logs);
+      fetchDieselRates();
     } catch (err: any) {
       showError(err.message);
     }
@@ -332,6 +424,83 @@ export default function App() {
     }
   };
 
+  const VEHICLE_FUEL_RATES: { [key: string]: number } = {
+    light_van: 7.0,
+    cargo_truck: 12.0,
+    semi_trailer: 32.0,
+    electric_truck: 20.0,
+  };
+
+  const getDriverEfficiencyData = () => {
+    const driverDataMap: { [key: number]: { logs: any[], driver: any } } = {};
+    drivers.forEach(d => {
+      driverDataMap[d.id] = { logs: [], driver: d };
+    });
+    
+    fuelLogs.forEach(log => {
+      if (driverDataMap[log.driver_id]) {
+        driverDataMap[log.driver_id].logs.push(log);
+      }
+    });
+
+    const efficiencyList: any[] = [];
+
+    Object.keys(driverDataMap).forEach(key => {
+      const driverId = parseInt(key);
+      const { logs, driver } = driverDataMap[driverId];
+      if (logs.length === 0) return;
+
+      const sortedLogs = [...logs].sort((a, b) => a.odometer - b.odometer);
+      
+      let totalDistance = 0;
+      let totalLiters = 0;
+      
+      for (let i = 0; i < sortedLogs.length; i++) {
+        const currentLog = sortedLogs[i];
+        let prevOdometer = 0;
+        if (i === 0) {
+          const expected = VEHICLE_FUEL_RATES[driver.vehicle_type || 'cargo_truck'] || 12.0;
+          prevOdometer = Math.max(0, currentLog.odometer - (currentLog.liters_refueled / expected) * 100);
+        } else {
+          prevOdometer = sortedLogs[i - 1].odometer;
+        }
+        
+        const dist = currentLog.odometer - prevOdometer;
+        if (dist > 0) {
+          totalDistance += dist;
+          totalLiters += currentLog.liters_refueled;
+        }
+      }
+
+      if (totalDistance > 0) {
+        const actualRate = (totalLiters / totalDistance) * 100;
+        const expectedRate = VEHICLE_FUEL_RATES[driver.vehicle_type || 'cargo_truck'] || 12.0;
+        efficiencyList.push({
+          driverName: driver.name,
+          vehicleType: driver.vehicle_type || 'cargo_truck',
+          actualRate: parseFloat(actualRate.toFixed(2)),
+          expectedRate: parseFloat(expectedRate.toFixed(2)),
+          totalLiters: totalLiters,
+          totalDistance: totalDistance
+        });
+      }
+    });
+
+    return efficiencyList.slice(0, 5);
+  };
+
+  const getFuelSpendHistory = () => {
+    const sorted = [...fuelLogs]
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      .slice(-10);
+    return sorted.map(log => ({
+      date: new Date(log.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      cost: log.cost,
+      liters: log.liters_refueled,
+    }));
+  };
+
+
   const handleLogFuelSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -341,14 +510,20 @@ export default function App() {
           liters_refueled: parseFloat(fuelRefueled),
           cost: parseFloat(fuelCost),
           odometer: parseFloat(fuelOdometer),
+          trip_id: parseInt(fuelTripId),
+          is_personal_two_wheeler: isPersonalTwoWheeler,
         })
       });
-      showSuccess("Refueling log saved successfully!");
+      showSuccess(result.is_personal_two_wheeler 
+        ? "Personal refuel logged successfully. This will be deducted from your next pay statement!" 
+        : "Refueling log saved successfully!");
       setFuelRefueled('');
       setFuelCost('');
       setFuelOdometer('');
+      setFuelTripId('');
+      setIsPersonalTwoWheeler(false);
 
-      if (myDriverProfile) {
+      if (myDriverProfile && !result.is_personal_two_wheeler) {
         setMyDriverProfile({
           ...myDriverProfile,
           odometer_km: result.odometer
@@ -358,6 +533,84 @@ export default function App() {
           setMyVehicle(vData);
         }
       }
+
+      if (result.is_flagged_fraud) {
+        showError(`Warning: Transaction flagged for audit: ${result.fraud_reason}`);
+      }
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
+  const handleStartEditFuelLog = (log: any) => {
+    setEditingFuelLog({ ...log });
+    if (log.trip_id && dieselRates && dieselRates.cities) {
+      const trip = trips.find(t => t.id === log.trip_id);
+      if (trip) {
+        const foundCity = Object.keys(dieselRates.cities).find(city => 
+          trip.source.toLowerCase().includes(city.toLowerCase()) || 
+          trip.destination.toLowerCase().includes(city.toLowerCase())
+        );
+        if (foundCity) {
+          setEditDieselCity(foundCity);
+          return;
+        }
+      }
+    }
+    setEditDieselCity('Mumbai');
+  };
+
+  const handleUpdateFuelLog = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFuelLog) return;
+    try {
+      await apiFetch(`/fuel/fuel-logs/${editingFuelLog.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          liters_refueled: parseFloat(editingFuelLog.liters_refueled),
+          cost: parseFloat(editingFuelLog.cost),
+          odometer: parseFloat(editingFuelLog.odometer),
+          is_flagged_fraud: editingFuelLog.is_flagged_fraud,
+          fraud_reason: editingFuelLog.fraud_reason || null,
+          trip_id: editingFuelLog.trip_id ? parseInt(editingFuelLog.trip_id) : null,
+        }),
+      });
+      showSuccess("Fuel log updated successfully!");
+      setEditingFuelLog(null);
+      fetchFuelLogs();
+      fetchFuelAnalytics();
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
+  const handleDispatcherLogFuelSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const result = await apiFetch('/fuel/fuel-logs', {
+        method: 'POST',
+        body: JSON.stringify({
+          driver_id: parseInt(dispatcherFuelLogData.driver_id),
+          liters_refueled: parseFloat(dispatcherFuelLogData.liters_refueled),
+          cost: parseFloat(dispatcherFuelLogData.cost),
+          odometer: parseFloat(dispatcherFuelLogData.odometer),
+          trip_id: parseInt(dispatcherFuelLogData.trip_id),
+          is_personal_two_wheeler: dispatcherPersonalTwoWheeler,
+        })
+      });
+      showSuccess(result.is_personal_two_wheeler 
+        ? "Personal refuel logged successfully. This will be deducted from the driver's payout." 
+        : "Refueling log submitted successfully on behalf of driver!");
+      setDispatcherFuelLogData({
+        driver_id: '',
+        liters_refueled: '',
+        cost: '',
+        odometer: '',
+        trip_id: '',
+      });
+      setDispatcherPersonalTwoWheeler(false);
+      fetchFuelLogs();
+      fetchFuelAnalytics();
 
       if (result.is_flagged_fraud) {
         showError(`Warning: Transaction flagged for audit: ${result.fraud_reason}`);
@@ -795,7 +1048,8 @@ export default function App() {
           username: signUpUsername,
           email: signUpEmail,
           password: signUpPassword,
-          role: signUpRole
+          role: signUpRole,
+          phone: signUpRole === 'driver' ? signUpPhone : undefined
         })
       });
       showSuccess("Account registered successfully! Please log in.");
@@ -803,6 +1057,7 @@ export default function App() {
       setSignUpUsername('');
       setSignUpEmail('');
       setSignUpPassword('');
+      setSignUpPhone('');
       setIsSignUp(false);
     } catch (e: any) {
       setAuthError(e.message);
@@ -838,6 +1093,12 @@ export default function App() {
         // Fetch leaderboard
         const lb = await apiFetch('/drivers/leaderboard');
         setLeaderboard(lb);
+
+        // Fetch scorecards for current month
+        try {
+          const sc = await apiFetch(`/drivers/scorecard?year=${new Date().getFullYear()}&month=${new Date().getMonth() + 1}`);
+          setScorecards(sc);
+        } catch (_) { /* no data yet */ }
 
         // Fetch vehicles
         const vehiclesList = await apiFetch('/vehicles/');
@@ -924,6 +1185,40 @@ export default function App() {
     }
   };
 
+  // Matchmaking recommendations fetch
+  useEffect(() => {
+    if (assigningTripId) {
+      const fetchRecommendations = async () => {
+        setLoadingRecs(true);
+        try {
+          const recs = await apiFetch(`/trips/${assigningTripId}/match-recommendations`);
+          setRecommendations(recs);
+        } catch (err: any) {
+          showError(err.message);
+        } finally {
+          setLoadingRecs(false);
+        }
+      };
+      fetchRecommendations();
+    } else {
+      setRecommendations([]);
+    }
+  }, [assigningTripId]);
+
+  const handleSmartMatch = async () => {
+    if (!assigningTripId) return;
+    try {
+      const res = await apiFetch(`/trips/${assigningTripId}/smart-match`, {
+        method: 'POST'
+      });
+      showSuccess(res.message);
+      setAssigningTripId(null);
+      loadData();
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
+
   // Business Action: Assign Driver (manual)
   const handleManualAssign = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -994,9 +1289,13 @@ export default function App() {
     e.preventDefault();
     if (!transitioningTrip) return;
     try {
+      const payload: any = { note: transitionNote || undefined };
+      if (transitioningTrip.action === 'complete' && transitionOdometer) {
+        payload.odometer = parseFloat(transitionOdometer);
+      }
       const res = await apiFetch(`/trips/${transitioningTrip.id}/${transitioningTrip.action}`, {
         method: 'PATCH',
-        body: JSON.stringify({ note: transitionNote || undefined })
+        body: JSON.stringify(payload)
       });
       if (res && res.warning) {
         showSuccess(`Trip completed successfully!\n ${res.warning}`);
@@ -1005,6 +1304,7 @@ export default function App() {
       }
       setTransitioningTrip(null);
       setTransitionNote('');
+      setTransitionOdometer('');
       loadData();
     } catch (e: any) {
       showError(e.message);
@@ -1099,6 +1399,8 @@ export default function App() {
   // Business Action: Copy Trip Summary to Clipboard
   const handleCopyTripSummary = (trip: any) => {
     const durationHrs = trip.duration_hours !== undefined && trip.duration_hours !== null ? trip.duration_hours : (trip.duration_minutes ? (trip.duration_minutes / 60).toFixed(1) : 'N/A');
+    const driverText = trip.driver_name ? `Driver: ${trip.driver_name}` : 'Driver: Unassigned';
+    const fareText = trip.estimated_fare !== null && trip.estimated_fare !== undefined ? `Estimated Fare: ₹${trip.estimated_fare}` : 'Estimated Fare: N/A';
     const summary = `📋 Dispatch #${trip.id}: ${trip.source} ➔ ${trip.destination}\n• Status: ${trip.status.toUpperCase()}\n• ${driverText}\n• ${fareText}\n• Distance: ${trip.distance_km || 'N/A'} km | Duration: ${durationHrs} hours`;
     navigator.clipboard.writeText(summary);
     showSuccess(`Trip #${trip.id} summary copied to clipboard!`);
@@ -1462,6 +1764,20 @@ export default function App() {
               </select>
             </div>
 
+            {signUpRole === 'driver' && (
+              <div className="form-group" style={{ marginBottom: '24px' }}>
+                <label className="form-label">Phone Number *</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  required
+                  value={signUpPhone}
+                  onChange={e => setSignUpPhone(e.target.value)}
+                  placeholder="e.g. 9876543210"
+                />
+              </div>
+            )}
+
             <button type="submit" className="btn btn-primary" style={{ justifyContent: 'center', padding: '14px', marginBottom: '16px' }}>
               Register Account
             </button>
@@ -1624,6 +1940,19 @@ export default function App() {
                     Fuel & ESG
                   </div>
                 </li>
+                <li>
+                  <div
+                    className={`nav-item ${activeTab === 'reconciliation' ? 'active' : ''}`}
+                    onClick={() => {
+                      setActiveTab('reconciliation');
+                      loadData();
+                    }}
+                  >
+                    <Shield size={18} />
+                    Financial Audits
+                  </div>
+                </li>
+
               </>
             )}
 
@@ -1993,9 +2322,21 @@ export default function App() {
                               <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>ID: {driver.id} | Phone: {driver.phone}</div>
                             </td>
                             <td>
-                              <span className={`badge badge-${driver.status}`}>
-                                {driver.status.replace('_', ' ')}
-                              </span>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <span className={`badge badge-${driver.status}`} style={{ width: 'fit-content' }}>
+                                  {driver.status.replace('_', ' ')}
+                                </span>
+                                {driver.active_hours_last_24h !== undefined && driver.active_hours_last_24h > 0 && (
+                                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                    Active 24h: {driver.active_hours_last_24h.toFixed(1)} hrs
+                                    {driver.active_hours_last_24h > 8.0 && (
+                                      <span className="expiry-indicator expiry-red" style={{ marginLeft: '6px', fontSize: '10px', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                        <AlertTriangle size={10} /> Fatigue Lockout
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             </td>
                             <td>
                               {driver.license_expiry ? (
@@ -2068,17 +2409,42 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', border: vehicles.some(v => v.is_service_overdue) ? '1px solid var(--accent-red)' : '1px solid var(--border-color)' }}>
+                  <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', border: vehicles.some(v => v.is_service_overdue) ? '1px solid var(--accent-red)' : vehicles.some(v => v.next_service_due_odometer && (v.next_service_due_odometer - v.odometer_km <= 500)) ? '1px solid var(--status-amber)' : '1px solid var(--border-color)' }}>
                     <div style={{ fontSize: '20px' }}>⚠️</div>
-                    <div className="metric-label">Service Alerts Due</div>
-                    <div className="metric-value" style={{ color: vehicles.some(v => v.is_service_overdue) ? 'var(--accent-red)' : 'var(--text-secondary)', fontSize: '22px' }}>
-                      {vehicles.filter(v => v.is_service_overdue).length}
+                    <div className="metric-label">Service Overdue / Soon</div>
+                    <div className="metric-value" style={{ display: 'flex', alignItems: 'baseline', gap: '8px', fontSize: '22px' }}>
+                      <span style={{ color: vehicles.some(v => v.is_service_overdue) ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
+                        {vehicles.filter(v => v.is_service_overdue).length}
+                      </span>
+                      {vehicles.some(v => v.next_service_due_odometer && (v.next_service_due_odometer - v.odometer_km <= 500) && !v.is_service_overdue) && (
+                        <span style={{ fontSize: '12px', color: 'var(--status-amber)' }}>
+                          (+{vehicles.filter(v => v.next_service_due_odometer && (v.next_service_due_odometer - v.odometer_km <= 500) && !v.is_service_overdue).length} soon)
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
 
-                {/* Vehicles Directory Panel */}
-                <div className="content-panel">
+                {/* Vehicles Navigation Sub-Tabs */}
+                <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', marginBottom: '8px' }}>
+                  <button
+                    onClick={() => setVehiclesSubTab('registry')}
+                    className={`btn ${vehiclesSubTab === 'registry' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '13px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    🚚 Vehicle Registry Directory
+                  </button>
+                  <button
+                    onClick={() => setVehiclesSubTab('utilization')}
+                    className={`btn ${vehiclesSubTab === 'utilization' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '13px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    📊 Fleet Downtime & Utilization Dashboard
+                  </button>
+                </div>
+
+                {vehiclesSubTab === 'registry' && (
+                  <div className="content-panel">
                   <div className="panel-header">
                     <h2 className="panel-title">
                       <Truck size={20} color="var(--accent-cyan)" />
@@ -2144,6 +2510,11 @@ export default function App() {
                                     <AlertTriangle size={12} />
                                     Service Overdue (Due: {v.next_service_due_odometer?.toLocaleString()} km)
                                   </span>
+                                ) : v.next_service_due_odometer && (v.next_service_due_odometer - v.odometer_km <= 500) ? (
+                                  <span className="expiry-indicator expiry-amber" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                    <AlertTriangle size={12} />
+                                    Warning: Service Due Soon ({Math.round(v.next_service_due_odometer - v.odometer_km)} km left)
+                                  </span>
                                 ) : (
                                   <span style={{ color: 'var(--accent-green)', fontSize: '12px', fontWeight: 500 }}>
                                     ✓ Clear (Next due: {v.next_service_due_odometer?.toLocaleString()} km)
@@ -2159,7 +2530,7 @@ export default function App() {
                                         description: '',
                                         cost: '0',
                                         odometer_at_service: v.odometer_km.toString(),
-                                        next_service_due_odometer: (v.odometer_km + 10000).toString()
+                                        next_service_due_odometer: (v.odometer_km + 5000).toString()
                                       });
                                       setShowLogMaintenance(v);
                                     }}
@@ -2178,6 +2549,33 @@ export default function App() {
                                   >
                                     📋 History
                                   </button>
+                                  {v.status === 'maintenance' && (
+                                    <button
+                                      onClick={async () => {
+                                        try {
+                                          const logs = await apiFetch(`/vehicles/${v.id}/maintenance`);
+                                          const openLog = logs.find((l: any) => l.completed_at === null);
+                                          if (openLog) {
+                                            setCompleteMaintenanceData({
+                                              cost: openLog.cost ? openLog.cost.toString() : '0',
+                                              description: openLog.description || '',
+                                              next_service_due_odometer: (v.odometer_km + 5000).toString()
+                                            });
+                                            setCompletingMaintenanceLog(openLog);
+                                          } else {
+                                            showError("No open maintenance logs found for this vehicle!");
+                                          }
+                                        } catch (err: any) {
+                                          showError(err.message);
+                                        }
+                                      }}
+                                      className="btn btn-primary btn-sm"
+                                      style={{ backgroundColor: 'var(--accent-green)', color: '#000', border: 'none', fontWeight: 600 }}
+                                      title="Complete Workshop Service"
+                                    >
+                                      ✓ Complete
+                                    </button>
+                                  )}
                                   <button
                                     onClick={() => setEditingVehicle(v)}
                                     className="btn btn-secondary btn-icon-only"
@@ -2204,6 +2602,194 @@ export default function App() {
                     </table>
                   </div>
                 </div>
+                )}
+
+                {vehiclesSubTab === 'utilization' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Period Selector and Filter Header */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.02)', padding: '16px 20px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <div>
+                        <h3 style={{ margin: 0, fontSize: '15px', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Clock size={16} color="var(--accent-cyan)" /> Asset Operational Hours & Downtime Metrics
+                        </h3>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Calculated in real-time across active trips and service logs</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>Select Audit Window:</span>
+                        <div className="btn-group" style={{ display: 'flex', gap: '4px' }}>
+                          {[7, 30, 90].map(days => (
+                            <button
+                              key={days}
+                              type="button"
+                              onClick={() => setUtilizationPeriod(days)}
+                              className={`btn btn-sm ${utilizationPeriod === days ? 'btn-primary' : 'btn-secondary'}`}
+                              style={{ padding: '4px 10px', fontSize: '12px' }}
+                            >
+                              {days} Days
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Summary cards specifically for selected period */}
+                    {(() => {
+                      const totalVehiclesVal = utilizationAnalytics.length;
+                      const avgUtilRate = totalVehiclesVal > 0 
+                        ? Math.round(utilizationAnalytics.reduce((acc, curr) => acc + curr.utilization_rate, 0) / totalVehiclesVal)
+                        : 0;
+                      const totalMileage = utilizationAnalytics.reduce((acc, curr) => acc + curr.mileage_accumulated, 0);
+                      const totalDowntime = utilizationAnalytics.reduce((acc, curr) => acc + curr.downtime_hours, 0);
+
+                      return (
+                        <div className="metrics-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+                          <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', backgroundColor: 'rgba(0, 242, 254, 0.02)' }}>
+                            <div className="metric-label">Average Fleet Utilization</div>
+                            <div className="metric-value" style={{ color: 'var(--accent-cyan)', fontSize: '24px' }}>{avgUtilRate}%</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Target threshold: &gt; 40%</div>
+                          </div>
+                          <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+                            <div className="metric-label">Distance Accumulated (Period)</div>
+                            <div className="metric-value" style={{ color: 'var(--accent-green)', fontSize: '24px' }}>{totalMileage.toLocaleString()} km</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Fleet wear & tire degradation indicator</div>
+                          </div>
+                          <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+                            <div className="metric-label">Workshop Downtime Hours</div>
+                            <div className="metric-value" style={{ color: 'var(--accent-amber)', fontSize: '24px' }}>{totalDowntime.toFixed(1)} hrs</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Planned/unplanned vehicle repairs</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Left/Right Split: Alarms and main detailed table */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: '20px', alignItems: 'start' }}>
+                      {/* Left: Wear & Idle warnings list */}
+                      <div className="content-panel" style={{ padding: '16px', margin: 0, backgroundColor: 'rgba(255,255,255,0.01)' }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
+                          ⚠️ Fleet Risk Assessment
+                        </h4>
+                        
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                          <div>
+                            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-red)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <AlertTriangle size={12} /> High-Wear Warnings
+                            </div>
+                            {utilizationAnalytics.filter(v => v.wear_alert_level === 'high').length === 0 ? (
+                              <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                                ✓ No high wear concerns.
+                              </div>
+                            ) : (
+                              utilizationAnalytics.filter(v => v.wear_alert_level === 'high').map(v => (
+                                <div key={v.vehicle_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', backgroundColor: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.15)', borderRadius: '6px', marginBottom: '6px' }}>
+                                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#fff' }}>{v.make} ({v.license_plate})</span>
+                                  <span style={{ fontSize: '10px', color: 'var(--accent-red)', fontWeight: 600 }}>{v.mileage_accumulated} km</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-amber)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <AlertTriangle size={12} /> Under-Utilized Assets
+                            </div>
+                            {utilizationAnalytics.filter(v => v.utilization_rate < 15).length === 0 ? (
+                              <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px' }}>
+                                ✓ All assets active.
+                              </div>
+                            ) : (
+                              utilizationAnalytics.filter(v => v.utilization_rate < 15).map(v => (
+                                <div key={v.vehicle_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', backgroundColor: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.15)', borderRadius: '6px', marginBottom: '6px' }}>
+                                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#fff' }}>{v.make} ({v.license_plate})</span>
+                                  <span style={{ fontSize: '10px', color: 'var(--accent-amber)', fontWeight: 600 }}>{v.utilization_rate}% Util</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Asset utilization table */}
+                      <div className="content-panel" style={{ padding: '20px', margin: 0 }}>
+                        <h4 style={{ margin: '0 0 16px 0', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
+                          Asset Breakdown List
+                        </h4>
+                        
+                        <div className="table-container">
+                          <table className="dashboard-table">
+                            <thead>
+                              <tr>
+                                <th>Vehicle</th>
+                                <th>Active Hours</th>
+                                <th>Downtime Hours</th>
+                                <th>Idle Hours</th>
+                                <th>Hours Distribution</th>
+                                <th>Util %</th>
+                                <th>Wear Level</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {utilizationLoading ? (
+                                <tr>
+                                  <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
+                                    Recalculating fleet utilization...
+                                  </td>
+                                </tr>
+                              ) : utilizationAnalytics.length === 0 ? (
+                                <tr>
+                                  <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
+                                    No assets found in dashboard.
+                                  </td>
+                                </tr>
+                              ) : (
+                                utilizationAnalytics.map(v => {
+                                  const total = v.active_hours + v.downtime_hours + v.idle_hours;
+                                  const activePct = total > 0 ? (v.active_hours / total) * 100 : 0;
+                                  const downPct = total > 0 ? (v.downtime_hours / total) * 100 : 0;
+                                  const idlePct = total > 0 ? (v.idle_hours / total) * 100 : 0;
+
+                                  return (
+                                    <tr key={v.vehicle_id}>
+                                      <td>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{v.make} {v.model}</div>
+                                        <code style={{ fontSize: '11px', color: 'var(--accent-cyan)' }}>{v.license_plate}</code>
+                                      </td>
+                                      <td>{v.active_hours.toFixed(1)}h</td>
+                                      <td style={{ color: v.downtime_hours > 0 ? 'var(--accent-amber)' : 'var(--text-secondary)' }}>{v.downtime_hours.toFixed(1)}h</td>
+                                      <td>{v.idle_hours.toFixed(1)}h</td>
+                                      <td>
+                                        {/* CSS Stacked Progress Bar */}
+                                        <div style={{ display: 'flex', height: '8px', width: '120px', borderRadius: '4px', overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.05)' }}>
+                                          <div style={{ width: `${activePct}%`, backgroundColor: 'var(--accent-cyan)' }} title={`Active: ${v.active_hours}h (${Math.round(activePct)}%)`} />
+                                          <div style={{ width: `${downPct}%`, backgroundColor: 'var(--accent-amber)' }} title={`Downtime: ${v.downtime_hours}h (${Math.round(downPct)}%)`} />
+                                          <div style={{ width: `${idlePct}%`, backgroundColor: 'rgba(255,255,255,0.1)' }} title={`Idle: ${v.idle_hours}h (${Math.round(idlePct)}%)`} />
+                                        </div>
+                                      </td>
+                                      <td style={{ fontWeight: 600, color: v.utilization_rate >= 40 ? 'var(--accent-green)' : v.utilization_rate >= 20 ? 'var(--accent-cyan)' : 'var(--accent-amber)' }}>
+                                        {v.utilization_rate}%
+                                      </td>
+                                      <td>
+                                        <span className={`badge`} style={{
+                                          backgroundColor: v.wear_alert_level === 'high' ? 'rgba(239,68,68,0.12)' : v.wear_alert_level === 'medium' ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)',
+                                          color: v.wear_alert_level === 'high' ? 'var(--accent-red)' : v.wear_alert_level === 'medium' ? 'var(--accent-amber)' : 'var(--accent-green)',
+                                          fontSize: '11px',
+                                          padding: '2px 8px',
+                                          borderRadius: '4px'
+                                        }}>
+                                          {v.wear_alert_level}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2345,6 +2931,48 @@ export default function App() {
                               <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                                 ID: {trip.id} | <strong>From client:</strong> {trip.source_company || 'Standard'} | <strong>To client:</strong> {trip.destination_company || 'Standard'} | fare: ₹{trip.estimated_fare || 'N/A'}
                               </div>
+                              {trip.pre_trip_inspection && (
+                                <div style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '11px',
+                                  color: trip.pre_trip_inspection.is_safe ? 'var(--accent-green)' : 'var(--accent-red)',
+                                  marginTop: '4px',
+                                  fontWeight: 500,
+                                  backgroundColor: trip.pre_trip_inspection.is_safe ? 'rgba(69,242,72,0.06)' : 'rgba(239,68,68,0.06)',
+                                  border: `1px solid ${trip.pre_trip_inspection.is_safe ? 'rgba(69,242,72,0.15)' : 'rgba(239,68,68,0.15)'}`,
+                                  padding: '2px 8px',
+                                  borderRadius: '4px'
+                                }}>
+                                  <Shield size={11} />
+                                  <span>Safety: {trip.pre_trip_inspection.is_safe ? 'PASS' : 'FAIL'}</span>
+                                </div>
+                              )}
+                              {(() => {
+                                if (!dieselRates || !dieselRates.cities) return null;
+                                let srcPrice: number | null = null;
+                                let destPrice: number | null = null;
+                                for (const [city, price] of Object.entries(dieselRates.cities)) {
+                                  if (trip.source.toLowerCase().includes(city.toLowerCase())) {
+                                    srcPrice = price as number;
+                                  }
+                                  if (trip.destination.toLowerCase().includes(city.toLowerCase())) {
+                                    destPrice = price as number;
+                                  }
+                                }
+                                if (srcPrice && destPrice && srcPrice !== destPrice) {
+                                  const diff = Math.abs(srcPrice - destPrice);
+                                  const isSrcCheaper = srcPrice < destPrice;
+                                  return (
+                                    <div style={{ fontSize: '11px', color: 'var(--accent-green)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '3px', fontWeight: 500 }}>
+                                      <span>💡</span>
+                                      <span>Fuel advice: Refuel at {isSrcCheaper ? 'source' : 'destination'} (Save ₹{diff.toFixed(2)}/L)</span>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </td>
                             <td>
                               <div style={{ fontSize: '12px' }}>{trip.distance_km || 'N/A'} km | {trip.duration_hours !== undefined && trip.duration_hours !== null ? `${trip.duration_hours} hrs` : (trip.duration_minutes ? `${(trip.duration_minutes / 60).toFixed(1)} hrs` : 'N/A')}</div>
@@ -2376,12 +3004,37 @@ export default function App() {
                                   {trip.status}
                                 </span>
 
+                                {trip.status === 'assigned' && trip.arrived_at_source_time && (
+                                  <span className="expiry-indicator expiry-green" style={{ fontSize: '10px', display: 'inline-flex', alignItems: 'center', gap: '3px', padding: '2px 6px' }}>
+                                    ✓ Arrived at Source
+                                  </span>
+                                )}
+
+                                {trip.delay_risk && (
+                                  <span className="expiry-indicator expiry-red" style={{ fontSize: '10px', display: 'inline-flex', alignItems: 'center', gap: '3px', padding: '2px 6px' }}>
+                                    ⚠️ Delay Risk
+                                  </span>
+                                )}
+
                                 {/* Interactive Driver Actions */}
                                 {trip.status === 'assigned' && (isDispatcher || (isDriver && myDriverProfile?.id === trip.driver_id)) && (
-                                  <button onClick={() => setTransitioningTrip({ id: trip.id, action: 'start' })} className="btn btn-success btn-sm" style={{ padding: '3px 8px', fontSize: '10px' }}>
-                                    <Play size={10} />
-                                    Start Trip
-                                  </button>
+                                  <>
+                                    {!trip.pre_trip_inspection ? (
+                                      <button onClick={() => setShowInspectionTripId(trip.id)} className="btn btn-sm" style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: 'var(--accent-amber)', color: '#000', fontWeight: 600 }}>
+                                        <Shield size={10} style={{ marginRight: '3px', display: 'inline' }} />
+                                        Safety Check
+                                      </button>
+                                    ) : !trip.pre_trip_inspection.is_safe ? (
+                                      <span className="expiry-indicator expiry-red" style={{ fontSize: '10px', padding: '2px 6px', fontWeight: 600 }}>
+                                        ❌ Unsafe / Failed
+                                      </span>
+                                    ) : (
+                                      <button onClick={() => setTransitioningTrip({ id: trip.id, action: 'start' })} className="btn btn-success btn-sm" style={{ padding: '3px 8px', fontSize: '10px' }}>
+                                        <Play size={10} />
+                                        Start Trip
+                                      </button>
+                                    )}
+                                  </>
                                 )}
                                 {trip.status === 'started' && (isDispatcher || (isDriver && myDriverProfile?.id === trip.driver_id)) && (
                                   <button onClick={() => setTransitioningTrip({ id: trip.id, action: 'complete' })} className="btn btn-primary btn-sm" style={{ padding: '3px 8px', fontSize: '10px' }}>
@@ -2463,6 +3116,22 @@ export default function App() {
                         style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 16px' }}
                       >
                         📊 Performance Analytics
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setPerformanceSubTab('scorecard');
+                          setScorecardLoading(true);
+                          try {
+                            const sc = await apiFetch(`/drivers/scorecard?year=${scorecardYear}&month=${scorecardMonth}`);
+                            setScorecards(sc);
+                          } finally {
+                            setScorecardLoading(false);
+                          }
+                        }}
+                        className={`btn ${performanceSubTab === 'scorecard' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 16px' }}
+                      >
+                        🎯 KPI Scorecards
                       </button>
                     </div>
 
@@ -2668,6 +3337,130 @@ export default function App() {
                       </div>
                     )}
 
+                    {performanceSubTab === 'scorecard' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        {/* Period Selector */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', background: 'var(--surface-1)', padding: '14px 18px', borderRadius: '10px', border: '1px solid var(--border-dim)' }}>
+                          <span style={{ fontSize: '13px', color: 'var(--text-secondary)', fontWeight: 600 }}>📅 Period:</span>
+                          <select
+                            value={scorecardYear}
+                            onChange={e => setScorecardYear(Number(e.target.value))}
+                            style={{ background: 'var(--surface-2)', color: '#fff', border: '1px solid var(--border-dim)', borderRadius: '6px', padding: '6px 10px', fontSize: '13px' }}
+                          >
+                            {[2023, 2024, 2025, 2026].map(y => <option key={y} value={y}>{y}</option>)}
+                          </select>
+                          <select
+                            value={scorecardMonth}
+                            onChange={e => setScorecardMonth(Number(e.target.value))}
+                            style={{ background: 'var(--surface-2)', color: '#fff', border: '1px solid var(--border-dim)', borderRadius: '6px', padding: '6px 10px', fontSize: '13px' }}
+                          >
+                            {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, i) => (
+                              <option key={i+1} value={i+1}>{m}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={async () => {
+                              setScorecardLoading(true);
+                              try {
+                                const sc = await apiFetch(`/drivers/scorecard?year=${scorecardYear}&month=${scorecardMonth}`);
+                                setScorecards(sc);
+                              } finally { setScorecardLoading(false); }
+                            }}
+                            className="btn btn-primary btn-sm"
+                            style={{ padding: '6px 16px', fontSize: '13px' }}
+                          >
+                            {scorecardLoading ? 'Loading…' : '🔄 Load Scorecards'}
+                          </button>
+                          {scorecards.length > 0 && (
+                            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: 'auto' }}>
+                              {scorecards.length} driver{scorecards.length !== 1 ? 's' : ''} with activity this period
+                            </span>
+                          )}
+                        </div>
+
+                        {scorecardLoading ? (
+                          <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-secondary)' }}>
+                            <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
+                            <p>Computing scorecards…</p>
+                          </div>
+                        ) : scorecards.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-secondary)' }}>
+                            <div style={{ fontSize: '40px', marginBottom: '12px' }}>📭</div>
+                            <p>No driver activity found for this period. Try a different month.</p>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            {scorecards.map((sc: any, idx: number) => {
+                              const scoreColor = sc.overall_score >= 90 ? '#22c55e' : sc.overall_score >= 75 ? 'var(--accent-cyan)' : sc.overall_score >= 60 ? 'var(--accent-amber)' : sc.overall_score >= 40 ? 'orange' : 'var(--accent-red)';
+                              const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
+                              return (
+                                <div key={sc.driver_id} style={{
+                                  background: 'var(--surface-1)',
+                                  border: `1px solid ${idx < 3 ? scoreColor + '44' : 'var(--border-dim)'}`,
+                                  borderRadius: '12px',
+                                  overflow: 'hidden',
+                                }}>
+                                  {/* Header */}
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border-dim)', background: idx < 3 ? `linear-gradient(90deg, ${scoreColor}11, transparent)` : undefined }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                      {medal && <span style={{ fontSize: '24px' }}>{medal}</span>}
+                                      <div>
+                                        <div style={{ fontWeight: 700, color: '#fff', fontSize: '15px' }}>{sc.name}</div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{sc.phone} · ID {sc.driver_id}</div>
+                                      </div>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                      <div style={{ fontSize: '28px', fontWeight: 800, color: scoreColor, lineHeight: 1 }}>{sc.overall_score}</div>
+                                      <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '2px' }}>OVERALL SCORE /100</div>
+                                    </div>
+                                  </div>
+
+                                  {/* Score Bar */}
+                                  <div style={{ height: '4px', background: 'var(--surface-2)' }}>
+                                    <div style={{ height: '100%', width: `${sc.overall_score}%`, background: `linear-gradient(90deg, ${scoreColor}, ${scoreColor}88)`, transition: 'width 0.8s ease' }} />
+                                  </div>
+
+                                  {/* KPI Grid */}
+                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1px', background: 'var(--border-dim)' }}>
+                                    {[
+                                      { label: 'Completion Rate', value: `${sc.completion_rate}%`, color: sc.completion_rate >= 85 ? '#22c55e' : sc.completion_rate >= 70 ? 'var(--accent-amber)' : 'var(--accent-red)', icon: '✅' },
+                                      { label: 'On-Time Pickup', value: `${sc.on_time_pickup_rate}%`, color: sc.on_time_pickup_rate >= 85 ? '#22c55e' : sc.on_time_pickup_rate >= 70 ? 'var(--accent-amber)' : 'var(--accent-red)', icon: '⏱️' },
+                                      { label: 'Audit Pass Rate', value: `${sc.audit_pass_rate}%`, color: sc.audit_pass_rate >= 90 ? '#22c55e' : sc.audit_pass_rate >= 75 ? 'var(--accent-amber)' : 'var(--accent-red)', icon: '🔍' },
+                                      { label: 'Fatigue Incidents', value: sc.fatigue_incidents, color: sc.fatigue_incidents === 0 ? '#22c55e' : sc.fatigue_incidents <= 2 ? 'var(--accent-amber)' : 'var(--accent-red)', icon: '😴' },
+                                      { label: 'Trips Completed', value: sc.completed_trips, color: 'var(--accent-cyan)', icon: '🚗' },
+                                      { label: 'Flagged Trips', value: sc.flagged_trips, color: sc.flagged_trips === 0 ? '#22c55e' : 'var(--accent-red)', icon: '🚩' },
+                                      { label: 'Total Earnings', value: `₹${sc.total_earnings.toLocaleString('en-IN', {maximumFractionDigits: 0})}`, color: 'var(--accent-green)', icon: '💰' },
+                                      { label: 'Distance Covered', value: `${sc.total_distance_km.toFixed(1)} km`, color: 'var(--accent-amber)', icon: '🛣️' },
+                                    ].map(kpi => (
+                                      <div key={kpi.label} style={{ background: 'var(--surface-1)', padding: '14px 16px' }}>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' }}>{kpi.icon} {kpi.label}</div>
+                                        <div style={{ fontSize: '18px', fontWeight: 700, color: kpi.color }}>{kpi.value}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {/* Incentive Recommendation */}
+                                  <div style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: sc.bonus_recommendation > 0 ? 'rgba(34,197,94,0.08)' : sc.deduction_recommendation > 0 ? 'rgba(239,68,68,0.08)' : 'rgba(255,255,255,0.03)' }}>
+                                    <span style={{ fontSize: '13px', color: sc.bonus_recommendation > 0 ? '#22c55e' : sc.deduction_recommendation > 0 ? 'var(--accent-red)' : 'var(--text-secondary)' }}>
+                                      {sc.incentive_note}
+                                    </span>
+                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginLeft: '16px', flexShrink: 0 }}>
+                                      {sc.bonus_recommendation > 0 && (
+                                        <span style={{ fontWeight: 700, color: '#22c55e', fontSize: '14px' }}>+₹{sc.bonus_recommendation.toLocaleString('en-IN', {maximumFractionDigits: 0})}</span>
+                                      )}
+                                      {sc.deduction_recommendation > 0 && (
+                                        <span style={{ fontWeight: 700, color: 'var(--accent-red)', fontSize: '14px' }}>−₹{sc.deduction_recommendation.toLocaleString('en-IN', {maximumFractionDigits: 0})}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Summary Stats Row */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginTop: '28px' }}>
                       {[
@@ -2807,6 +3600,26 @@ export default function App() {
                                   <span className="detail-label">Vehicle Odometer</span>
                                   <span className="detail-val">{myVehicle.odometer_km?.toLocaleString()} km</span>
                                 </div>
+                                <div className="detail-row">
+                                  <span className="detail-label">Service Status</span>
+                                  <span className="detail-val">
+                                    {myVehicle.is_service_overdue ? (
+                                      <span className="expiry-indicator expiry-red" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                        <AlertTriangle size={12} />
+                                        Service Overdue (Due: {myVehicle.next_service_due_odometer?.toLocaleString()} km)
+                                      </span>
+                                    ) : myVehicle.next_service_due_odometer && (myVehicle.next_service_due_odometer - myVehicle.odometer_km <= 500) ? (
+                                      <span className="expiry-indicator expiry-amber" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                        <AlertTriangle size={12} />
+                                        Warning: Service Due Soon ({Math.round(myVehicle.next_service_due_odometer - myVehicle.odometer_km)} km left)
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: 'var(--accent-green)', fontWeight: 500 }}>
+                                        ✓ Clear (Next due: {myVehicle.next_service_due_odometer?.toLocaleString()} km)
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
                               </>
                             ) : (
                               <div className="detail-row" style={{ borderTop: '1px dashed var(--border-dim)', paddingTop: '10px', marginTop: '10px' }}>
@@ -2833,19 +3646,89 @@ export default function App() {
                         </div>
                         <form onSubmit={handleLogFuelSubmit}>
                           <div className="form-group">
-                            <label className="form-label">Fuel Refueled (Liters / kWh)</label>
+                            <label className="form-label">Associated Trip ID *</label>
+                            <input
+                              type="number"
+                              className="form-input"
+                              value={fuelTripId}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setFuelTripId(val);
+                                if (val) {
+                                  const trip = trips.find(t => t.id === parseInt(val));
+                                  if (trip) {
+                                    if (trip.driver_id !== myDriverProfile.id) {
+                                      showError(`Warning: Trip #${val} is assigned to a different driver (${trip.driver_name || `Driver #${trip.driver_id}`}).`);
+                                    } else {
+                                      setFuelOdometer(myDriverProfile.odometer_km ? myDriverProfile.odometer_km.toString() : '');
+                                    }
+                                    if (dieselRates && dieselRates.cities) {
+                                      const foundCity = Object.keys(dieselRates.cities).find(city => 
+                                        trip.source.toLowerCase().includes(city.toLowerCase()) || 
+                                        trip.destination.toLowerCase().includes(city.toLowerCase())
+                                      );
+                                      if (foundCity) {
+                                        setSelectedDieselCity(foundCity);
+                                        if (fuelRefueled) {
+                                          const cityRate = dieselRates.cities[foundCity] || dieselRates.national_average || 97.83;
+                                          setFuelCost((parseFloat(fuelRefueled) * cityRate).toFixed(2));
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }}
+                              required
+                              placeholder="e.g. 1"
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label">Fuel Refueled (Liters / kWh) *</label>
                             <input
                               type="number"
                               step="0.01"
                               className="form-input"
                               value={fuelRefueled}
-                              onChange={e => setFuelRefueled(e.target.value)}
+                              onChange={e => {
+                                const liters = e.target.value;
+                                setFuelRefueled(liters);
+                                if (liters && dieselRates) {
+                                  const cityRate = selectedDieselCity === 'national_average'
+                                    ? (dieselRates.national_average || 97.83)
+                                    : (dieselRates.cities[selectedDieselCity] || dieselRates.national_average || 97.83);
+                                  setFuelCost((parseFloat(liters) * cityRate).toFixed(2));
+                                }
+                              }}
                               required
                               placeholder="e.g. 45.50"
                             />
                           </div>
+                          {dieselRates && (
+                            <div className="form-group">
+                              <label className="form-label">Diesel Pricing City (India)</label>
+                              <select
+                                className="form-select"
+                                value={selectedDieselCity}
+                                onChange={e => {
+                                  const city = e.target.value;
+                                  setSelectedDieselCity(city);
+                                  if (fuelRefueled) {
+                                    const cityRate = city === 'national_average'
+                                      ? (dieselRates.national_average || 97.83)
+                                      : (dieselRates.cities[city] || dieselRates.national_average || 97.83);
+                                    setFuelCost((parseFloat(fuelRefueled) * cityRate).toFixed(2));
+                                  }
+                                }}
+                              >
+                                <option value="national_average">National Average (₹{dieselRates.national_average?.toFixed(2)})</option>
+                                {Object.entries(dieselRates.cities).map(([name, price]: any) => (
+                                  <option key={name} value={name}>{name} (₹{price.toFixed(2)})</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                           <div className="form-group">
-                            <label className="form-label">Receipt Cost (₹)</label>
+                            <label className="form-label">Receipt Cost (₹) *</label>
                             <input
                               type="number"
                               step="0.01"
@@ -2855,7 +3738,13 @@ export default function App() {
                               required
                               placeholder="e.g. 4200.00"
                             />
+                            {dieselRates && fuelRefueled && (
+                              <span style={{ fontSize: '11px', color: 'var(--accent-cyan)', marginTop: '4px', display: 'block' }}>
+                                Calculated using {selectedDieselCity === 'national_average' ? 'National Average' : selectedDieselCity} rate: ₹{((selectedDieselCity === 'national_average' ? dieselRates.national_average : dieselRates.cities[selectedDieselCity]) || 97.83).toFixed(2)}/L
+                              </span>
+                            )}
                           </div>
+
                           <div className="form-group" style={{ marginBottom: '20px' }}>
                             <label className="form-label">Current Odometer (km)</label>
                             <input
@@ -2867,6 +3756,17 @@ export default function App() {
                               required
                               placeholder={`Must exceed ${myDriverProfile.odometer_km ? myDriverProfile.odometer_km.toFixed(1) : 0} km`}
                             />
+                          </div>
+                          <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+                            <input
+                              type="checkbox"
+                              id="is_personal_two_wheeler_driver"
+                              checked={isPersonalTwoWheeler}
+                              onChange={e => setIsPersonalTwoWheeler(e.target.checked)}
+                            />
+                            <label htmlFor="is_personal_two_wheeler_driver" className="form-label" style={{ margin: 0, cursor: 'pointer', fontSize: '13px' }}>
+                              🏍️ Personal Two-Wheeler Refuel (Deduct from Salary)
+                            </label>
                           </div>
                           <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
                             Submit Refueling Receipt
@@ -2926,62 +3826,500 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ESG carbon footprint visual bar graph (CSS only) */}
-                <div className="content-panel" style={{ padding: '20px' }}>
-                  <div className="panel-header" style={{ marginBottom: '16px' }}>
-                    <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      🌳 Environmental Impact & Decarbonization Index
-                    </h3>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px', alignItems: 'center' }}>
-                    <div style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>🌎</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Decarbonization Index</div>
-                      <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--accent-green)', margin: '4px 0' }}>
-                        {(() => {
-                          const dieselEmissions = trips.filter(t => t.status === 'completed').reduce((sum, t) => {
-                            return sum + (t.distance_km || 0) * 0.31;
-                          }, 0);
-                          const actualEmissions = fuelAnalytics?.total_carbon_emissions_kg || 0;
-                          if (dieselEmissions === 0) return '100%';
-                          const offsetPercent = Math.max(0, 100 - (actualEmissions / dieselEmissions) * 100);
-                          return `${offsetPercent.toFixed(1)}% Offset`;
-                        })()}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Savings compared to standard cargo truck fleet.</div>
+                {/* Two-Column Grid: Environmental Impact & Dispatcher Fuel Receipt Logger */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+                  
+                  {/* ESG carbon footprint visual bar graph (CSS only) */}
+                  <div className="content-panel" style={{ padding: '20px', margin: 0 }}>
+                    <div className="panel-header" style={{ marginBottom: '16px' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        🌳 Environmental Impact & Decarbonization Index
+                      </h3>
                     </div>
-
-                    <div>
-                      <div style={{ marginBottom: '12px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-                          <span style={{ color: 'var(--text-secondary)' }}>Standard Fleet Diesel Emissions (Baseline)</span>
-                          <strong style={{ color: '#fff' }}>
-                            {trips.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.distance_km || 0) * 0.31, 0).toFixed(1)} kg CO₂
-                          </strong>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '24px', alignItems: 'center' }}>
+                      <div style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-dim)', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '32px', marginBottom: '8px' }}>🌎</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Decarbonization Index</div>
+                        <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--accent-green)', margin: '4px 0' }}>
+                          {(() => {
+                            const dieselEmissions = trips.filter(t => t.status === 'completed').reduce((sum, t) => {
+                              return sum + (t.distance_km || 0) * 0.31;
+                            }, 0);
+                            const actualEmissions = fuelAnalytics?.total_carbon_emissions_kg || 0;
+                            if (dieselEmissions === 0) return '100%';
+                            const offsetPercent = Math.max(0, 100 - (actualEmissions / dieselEmissions) * 100);
+                            return `${offsetPercent.toFixed(1)}% Offset`;
+                          })()}
                         </div>
-                        <div style={{ height: '8px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: '100%', backgroundColor: '#a1a1aa' }} />
-                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Savings compared to standard cargo truck fleet.</div>
                       </div>
 
                       <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-                          <span style={{ color: 'var(--text-secondary)' }}>Our Active Eco-Fitted Fleet Emissions (Actual)</span>
-                          <strong style={{ color: 'var(--accent-green)' }}>
-                            {fuelAnalytics ? fuelAnalytics.total_carbon_emissions_kg.toFixed(1) : '0.0'} kg CO₂
-                          </strong>
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Standard Fleet Diesel Baseline</span>
+                            <strong style={{ color: '#fff' }}>
+                              {trips.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.distance_km || 0) * 0.31, 0).toFixed(1)} kg
+                            </strong>
+                          </div>
+                          <div style={{ height: '8px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: '100%', backgroundColor: '#a1a1aa' }} />
+                          </div>
                         </div>
-                        <div style={{ height: '8px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
-                          <div style={{
-                            height: '100%',
-                            width: `${Math.min(100, ((fuelAnalytics?.total_carbon_emissions_kg || 0) / (trips.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.distance_km || 0) * 0.31, 0) || 1)) * 100)}%`,
-                            backgroundColor: 'var(--accent-green)'
-                          }} />
+
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Our Actual Fleet Emissions</span>
+                            <strong style={{ color: 'var(--accent-green)' }}>
+                              {fuelAnalytics ? fuelAnalytics.total_carbon_emissions_kg.toFixed(1) : '0.0'} kg
+                            </strong>
+                          </div>
+                          <div style={{ height: '8px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%',
+                              width: `${Math.min(100, ((fuelAnalytics?.total_carbon_emissions_kg || 0) / (trips.filter(t => t.status === 'completed').reduce((sum, t) => sum + (t.distance_km || 0) * 0.31, 0) || 1)) * 100)}%`,
+                              backgroundColor: 'var(--accent-green)'
+                            }} />
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
+
+                  {/* Interstate Diesel Price Advisor Card */}
+                  <div className="content-panel" style={{ padding: '20px', margin: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <div className="panel-header" style={{ marginBottom: '16px' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        💡 Interstate Diesel Price Advisor
+                      </h3>
+                    </div>
+                    {dieselRates ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                          <div>
+                            <div style={{ fontSize: '11px', color: 'var(--accent-green)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                              🟢 Cheapest Cities
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              {Object.entries(dieselRates.cities)
+                                .sort((a: any, b: any) => a[1] - b[1])
+                                .slice(0, 3)
+                                .map(([city, price]: any) => (
+                                  <div key={city} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                                    <span style={{ color: 'var(--text-secondary)' }}>{city}</span>
+                                    <strong style={{ color: '#fff' }}>₹{price.toFixed(2)}</strong>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '11px', color: 'var(--accent-red)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                              🔴 Most Expensive
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              {Object.entries(dieselRates.cities)
+                                .sort((a: any, b: any) => b[1] - a[1])
+                                .slice(0, 3)
+                                .map(([city, price]: any) => (
+                                  <div key={city} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                                    <span style={{ color: 'var(--text-secondary)' }}>{city}</span>
+                                    <strong style={{ color: '#fff' }}>₹{price.toFixed(2)}</strong>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {(() => {
+                          const sortedCities: any = Object.entries(dieselRates.cities).sort((a: any, b: any) => a[1] - b[1]);
+                          if (sortedCities.length < 2) return null;
+                          const cheapest = sortedCities[0];
+                          const dearest = sortedCities[sortedCities.length - 1];
+                          const diff = dearest[1] - cheapest[1];
+                          return (
+                            <div style={{ 
+                              backgroundColor: 'rgba(0, 242, 254, 0.03)', 
+                              border: '1px dashed rgba(0, 242, 254, 0.15)', 
+                              borderRadius: '6px', 
+                              padding: '10px 12px', 
+                              fontSize: '11.5px', 
+                              color: 'var(--text-secondary)',
+                              marginTop: '8px'
+                            }}>
+                              💡 Refueling <strong>200L</strong> in <span style={{ color: 'var(--accent-green)' }}>{cheapest[0]}</span> instead of <span style={{ color: 'var(--accent-red)' }}>{dearest[0]}</span> saves approximately <strong style={{ color: 'var(--accent-cyan)' }}>₹{Math.round(diff * 200).toLocaleString()}</strong>!
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '12px', padding: '16px 0' }}>
+                        Loading pricing advisor statistics...
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Form: Log Fuel Receipt on Behalf of a Driver */}
+                  <div className="content-panel" style={{ padding: '20px', margin: 0 }}>
+                    <div className="panel-header" style={{ marginBottom: '16px' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--accent-cyan)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        ⛽ Log Fuel Receipt on Behalf of a Driver
+                      </h3>
+                    </div>
+                    <form onSubmit={handleDispatcherLogFuelSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Select Driver *</label>
+                          <select
+                            className="form-select"
+                            style={{ height: '36px', padding: '0 8px', fontSize: '13px' }}
+                            required
+                            value={dispatcherFuelLogData.driver_id}
+                            onChange={e => setDispatcherFuelLogData({ ...dispatcherFuelLogData, driver_id: e.target.value })}
+                          >
+                            <option value="">-- Select Driver --</option>
+                            {drivers.map(d => (
+                              <option key={d.id} value={d.id}>
+                                {d.name} ({d.phone})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Trip ID *</label>
+                          <input
+                            type="number"
+                            className="form-input"
+                            style={{ height: '36px', fontSize: '13px' }}
+                            required
+                            placeholder="e.g. 42"
+                            value={dispatcherFuelLogData.trip_id}
+                            onChange={e => {
+                              const val = e.target.value;
+                              let updatedData = { ...dispatcherFuelLogData, trip_id: val };
+                              if (val) {
+                                const trip = trips.find(t => t.id === parseInt(val));
+                                if (trip && trip.driver_id) {
+                                  updatedData.driver_id = trip.driver_id.toString();
+                                  const driver = drivers.find(d => d.id === trip.driver_id);
+                                  if (driver) {
+                                    updatedData.odometer = driver.odometer_km ? driver.odometer_km.toString() : '';
+                                  }
+                                }
+                                if (trip && dieselRates && dieselRates.cities) {
+                                  const foundCity = Object.keys(dieselRates.cities).find(city => 
+                                    trip.source.toLowerCase().includes(city.toLowerCase()) || 
+                                    trip.destination.toLowerCase().includes(city.toLowerCase())
+                                  );
+                                  if (foundCity) {
+                                    setDispatcherDieselCity(foundCity);
+                                    if (dispatcherFuelLogData.liters_refueled) {
+                                      const cityRate = dieselRates.cities[foundCity] || dieselRates.national_average || 97.83;
+                                      updatedData.cost = (parseFloat(dispatcherFuelLogData.liters_refueled) * cityRate).toFixed(2);
+                                    }
+                                  }
+                                }
+                              }
+                              setDispatcherFuelLogData(updatedData);
+                            }}
+                          />
+                        </div>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Odometer Reading (km) *</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            className="form-input"
+                            style={{ height: '36px', fontSize: '13px' }}
+                            required
+                            placeholder="e.g. 1500"
+                            value={dispatcherFuelLogData.odometer}
+                            onChange={e => setDispatcherFuelLogData({ ...dispatcherFuelLogData, odometer: e.target.value })}
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: dieselRates ? '1fr 1.2fr 1fr' : '1fr 1fr', gap: '12px' }}>
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Fuel Refueled (Liters) *</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            className="form-input"
+                            style={{ height: '36px', fontSize: '13px' }}
+                            required
+                            placeholder="e.g. 45.2"
+                            value={dispatcherFuelLogData.liters_refueled}
+                            onChange={e => {
+                              const liters = e.target.value;
+                              let updatedData = { ...dispatcherFuelLogData, liters_refueled: liters };
+                              if (liters && dieselRates) {
+                                const cityRate = dispatcherDieselCity === 'national_average'
+                                  ? (dieselRates.national_average || 97.83)
+                                  : (dieselRates.cities[dispatcherDieselCity] || dieselRates.national_average || 97.83);
+                                updatedData.cost = (parseFloat(liters) * cityRate).toFixed(2);
+                              }
+                              setDispatcherFuelLogData(updatedData);
+                            }}
+                          />
+                        </div>
+                        {dieselRates && (
+                          <div className="form-group" style={{ margin: 0 }}>
+                            <label className="form-label" style={{ fontSize: '11px' }}>Diesel Pricing City (India)</label>
+                            <select
+                              className="form-select"
+                              style={{ height: '36px', padding: '0 8px', fontSize: '13px' }}
+                              value={dispatcherDieselCity}
+                              onChange={e => {
+                                const city = e.target.value;
+                                setDispatcherDieselCity(city);
+                                if (dispatcherFuelLogData.liters_refueled) {
+                                  const cityRate = city === 'national_average'
+                                    ? (dieselRates.national_average || 97.83)
+                                    : (dieselRates.cities[city] || dieselRates.national_average || 97.83);
+                                  const calculatedCost = (parseFloat(dispatcherFuelLogData.liters_refueled) * cityRate).toFixed(2);
+                                  setDispatcherFuelLogData(prev => ({ ...prev, cost: calculatedCost }));
+                                }
+                              }}
+                            >
+                              <option value="national_average">National Average (₹{dieselRates.national_average?.toFixed(2)})</option>
+                              {Object.entries(dieselRates.cities).map(([name, price]: any) => (
+                                <option key={name} value={name}>{name} (₹{price.toFixed(2)})</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label className="form-label" style={{ fontSize: '11px' }}>Receipt Cost (₹) *</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            className="form-input"
+                            style={{ height: '36px', fontSize: '13px' }}
+                            required
+                            placeholder="e.g. 4000"
+                            value={dispatcherFuelLogData.cost}
+                            onChange={e => setDispatcherFuelLogData({ ...dispatcherFuelLogData, cost: e.target.value })}
+                          />
+                          {dieselRates && dispatcherFuelLogData.liters_refueled && (
+                            <span style={{ fontSize: '10px', color: 'var(--accent-cyan)', marginTop: '2px', display: 'block' }}>
+                              Using {dispatcherDieselCity === 'national_average' ? 'Average' : dispatcherDieselCity}: ₹{((dispatcherDieselCity === 'national_average' ? dieselRates.national_average : dieselRates.cities[dispatcherDieselCity]) || 97.83).toFixed(2)}/L
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', alignSelf: 'flex-start' }}>
+                        <input
+                          type="checkbox"
+                          id="is_personal_two_wheeler_dispatcher"
+                          checked={dispatcherPersonalTwoWheeler}
+                          onChange={e => setDispatcherPersonalTwoWheeler(e.target.checked)}
+                        />
+                        <label htmlFor="is_personal_two_wheeler_dispatcher" className="form-label" style={{ margin: 0, cursor: 'pointer', fontSize: '13px' }}>
+                          🏍️ Personal Two-Wheeler Refuel (Deduct from Driver's Payout)
+                        </label>
+                      </div>
+
+                      <button type="submit" className="btn btn-primary" style={{ marginTop: '8px', alignSelf: 'flex-end', height: '36px', padding: '0 16px', fontSize: '13px' }}>
+                        Submit Refueling Log
+                      </button>
+                    </form>
+                  </div>
                 </div>
+
+                {/* Visual Charts Grid: Expenditure & Efficiency */}
+                {(() => {
+                  const spendHistory = getFuelSpendHistory();
+                  const hasSpendHistory = spendHistory.length > 0;
+                  
+                  let linePath = "";
+                  let areaPath = "";
+                  const points: { x: number, y: number, label: string, cost: number, liters: number }[] = [];
+                  
+                  if (hasSpendHistory) {
+                    const width = 500;
+                    const height = 180;
+                    const paddingLeft = 55;
+                    const paddingRight = 20;
+                    const paddingTop = 20;
+                    const paddingBottom = 30;
+                    
+                    const chartWidth = width - paddingLeft - paddingRight;
+                    const chartHeight = height - paddingTop - paddingBottom;
+                    
+                    const costs = spendHistory.map(h => h.cost);
+                    const maxCost = Math.max(...costs) * 1.15;
+                    const minCost = 0;
+                    const costRange = maxCost - minCost || 1;
+                    
+                    spendHistory.forEach((pt, i) => {
+                      const x = paddingLeft + (spendHistory.length > 1 ? i * (chartWidth / (spendHistory.length - 1)) : chartWidth / 2);
+                      const y = height - paddingBottom - ((pt.cost - minCost) / costRange) * chartHeight;
+                      points.push({ x, y, label: pt.date, cost: pt.cost, liters: pt.liters });
+                    });
+                    
+                    if (points.length > 0) {
+                      linePath = `M ${points[0].x} ${points[0].y} ` + points.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
+                      areaPath = `M ${points[0].x} ${height - paddingBottom} ` + points.map(p => `L ${p.x} ${p.y}`).join(" ") + ` L ${points[points.length - 1].x} ${height - paddingBottom} Z`;
+                    }
+                  }
+
+                  const efficiencyData = getDriverEfficiencyData();
+                  const hasEfficiencyData = efficiencyData.length > 0;
+
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '24px' }}>
+                      
+                      {/* Chart 1: Expenditure Trend */}
+                      <div className="content-panel" style={{ padding: '20px', margin: 0 }}>
+                        <div className="panel-header" style={{ marginBottom: '16px' }}>
+                          <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            📈 Fuel Expenditure Trend (Last 10 Refuels)
+                          </h3>
+                        </div>
+                        {hasSpendHistory ? (
+                          <div style={{ position: 'relative' }}>
+                            <svg viewBox="0 0 500 180" style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+                              <defs>
+                                <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="var(--accent-cyan)" stopOpacity="0.3"/>
+                                  <stop offset="100%" stopColor="var(--accent-cyan)" stopOpacity="0.0"/>
+                                </linearGradient>
+                              </defs>
+                              
+                              {/* Grid lines */}
+                              {[0, 0.25, 0.5, 0.75, 1].map((ratio, index) => {
+                                const y = 20 + ratio * 130;
+                                const costs = spendHistory.map(h => h.cost);
+                                const maxCost = Math.max(...costs) * 1.15;
+                                const gridVal = maxCost - ratio * maxCost;
+                                return (
+                                  <g key={index}>
+                                    <line x1="55" y1={y} x2="480" y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="4 4" />
+                                    <text x="50" y={y + 3} fill="var(--text-secondary)" fontSize="9" textAnchor="end">
+                                      ₹{Math.round(gridVal)}
+                                    </text>
+                                  </g>
+                                );
+                              })}
+                              
+                              {/* Shaded Area */}
+                              {areaPath && <path d={areaPath} fill="url(#areaGrad)" />}
+                              
+                              {/* Line */}
+                              {linePath && <path d={linePath} fill="none" stroke="var(--accent-cyan)" strokeWidth="2.5" />}
+                              
+                              {/* Tooltip points */}
+                              {points.map((pt, index) => (
+                                <g key={index} className="chart-dot-group" style={{ cursor: 'pointer' }}>
+                                  <circle cx={pt.x} cy={pt.y} r="4" fill="var(--accent-cyan)" />
+                                  <circle cx={pt.x} cy={pt.y} r="8" fill="var(--accent-cyan)" opacity="0" className="hover-pulse" style={{ transition: 'opacity 0.2s' }} />
+                                  <title>
+                                    {pt.label} &#10;
+                                    Refueled: {pt.liters.toFixed(1)} L &#10;
+                                    Cost: ₹{pt.cost.toLocaleString()}
+                                  </title>
+                                  <text x={pt.x} y={170} fill="var(--text-secondary)" fontSize="9" textAnchor="middle">
+                                    {pt.label}
+                                  </text>
+                                </g>
+                              ))}
+                            </svg>
+                            <style>{`
+                              .chart-dot-group:hover circle:last-of-type {
+                                opacity: 0.3 !important;
+                              }
+                            `}</style>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                            No fuel data available to plot trends.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Chart 2: Driver Fuel Economy */}
+                      <div className="content-panel" style={{ padding: '20px', margin: 0 }}>
+                        <div className="panel-header" style={{ marginBottom: '16px' }}>
+                          <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            📊 Fuel Economy by Driver (Actual vs. Expected L/100km)
+                          </h3>
+                        </div>
+                        {hasEfficiencyData ? (
+                          <div>
+                            <div style={{ display: 'flex', gap: '16px', fontSize: '11px', marginBottom: '12px', justifyContent: 'flex-end' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                                <span style={{ display: 'inline-block', width: '12px', height: '12px', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: '2px' }} />
+                                Expected (Standard)
+                              </span>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                                <span style={{ display: 'inline-block', width: '12px', height: '12px', backgroundColor: 'var(--accent-green)', borderRadius: '2px' }} />
+                                Actual (Within Limit)
+                              </span>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+                                <span style={{ display: 'inline-block', width: '12px', height: '12px', backgroundColor: 'var(--accent-red)', borderRadius: '2px' }} />
+                                Actual (Inefficient)
+                              </span>
+                            </div>
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                              {(() => {
+                                const list = getDriverEfficiencyData();
+                                const maxRate = Math.max(...list.map(d => Math.max(d.actualRate, d.expectedRate)), 25);
+                                return list.map((item, index) => {
+                                  const expWidth = `${(item.expectedRate / maxRate) * 100}%`;
+                                  const actWidth = `${(item.actualRate / maxRate) * 100}%`;
+                                  const isInefficient = item.actualRate > item.expectedRate;
+                                  
+                                  return (
+                                    <div key={index} style={{ display: 'grid', gridTemplateColumns: '120px 1fr', alignItems: 'center', gap: '12px' }}>
+                                      <div style={{ fontSize: '12px', fontWeight: 500, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {item.driverName}
+                                        <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>{item.vehicleType.replace('_', ' ')}</div>
+                                      </div>
+                                      
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', position: 'relative' }}>
+                                        {/* Expected Bar */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                          <div style={{ flex: 1, height: '8px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                                            <div style={{ height: '100%', width: expWidth, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: '4px' }} />
+                                          </div>
+                                          <span style={{ fontSize: '10px', color: 'var(--text-secondary)', width: '45px', textAlign: 'right' }}>
+                                            {item.expectedRate.toFixed(1)} L
+                                          </span>
+                                        </div>
+                                        
+                                        {/* Actual Bar */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                          <div style={{ flex: 1, height: '8px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '4px', overflow: 'hidden' }}>
+                                            <div style={{
+                                              height: '100%',
+                                              width: actWidth,
+                                              backgroundColor: isInefficient ? 'var(--accent-red)' : 'var(--accent-green)',
+                                              borderRadius: '4px',
+                                              boxShadow: isInefficient ? '0 0 8px rgba(239, 68, 68, 0.4)' : 'none'
+                                            }} />
+                                          </div>
+                                          <span style={{ fontSize: '10px', fontWeight: 600, color: isInefficient ? 'var(--accent-red)' : 'var(--accent-green)', width: '45px', textAlign: 'right' }}>
+                                            {item.actualRate.toFixed(1)} L
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                });
+                              })()}
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
+                            No driver fuel efficiency records found.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Fuel Logs & Auditing Panel */}
                 <div className="content-panel">
@@ -2998,16 +4336,18 @@ export default function App() {
                         <tr>
                           <th>Date & Time</th>
                           <th>Driver</th>
+                          <th>Trip ID</th>
                           <th>Odometer</th>
                           <th>Refueled Vol</th>
                           <th>Receipt Cost</th>
                           <th>Security Audit Status</th>
+                          {isDispatcher && <th>Actions</th>}
                         </tr>
                       </thead>
                       <tbody>
                         {fuelLogs.length === 0 ? (
                           <tr>
-                            <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                            <td colSpan={isDispatcher ? 8 : 7} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
                               No fuel card transactions recorded yet.
                             </td>
                           </tr>
@@ -3015,14 +4355,19 @@ export default function App() {
                           fuelLogs.map(log => {
                             const driverName = drivers.find(d => d.id === log.driver_id)?.name || `Driver #${log.driver_id}`;
                             return (
-                              <tr key={log.id} style={{ borderLeft: log.is_flagged_fraud ? '4px solid var(--accent-red)' : 'none' }}>
+                              <tr key={log.id} style={{ borderLeft: log.is_personal_two_wheeler ? '4px solid var(--accent-amber)' : log.is_flagged_fraud ? '4px solid var(--accent-red)' : 'none' }}>
                                 <td>{new Date(log.created_at).toLocaleString()}</td>
                                 <td>{driverName}</td>
+                                <td>{log.trip_id ? `#${log.trip_id}` : 'N/A'}</td>
                                 <td>{log.odometer.toFixed(1)} km</td>
                                 <td>{log.liters_refueled.toFixed(2)} L</td>
                                 <td>₹{log.cost.toFixed(2)}</td>
                                 <td>
-                                  {log.is_flagged_fraud ? (
+                                  {log.is_personal_two_wheeler ? (
+                                    <span style={{ color: 'var(--accent-amber)', fontSize: '12px', fontWeight: 600 }}>
+                                      🏍️ Personal Two-Wheeler (Salary Deduction)
+                                    </span>
+                                  ) : log.is_flagged_fraud ? (
                                     <span style={{ color: 'var(--accent-red)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
                                       ⚠️ Flagged: {log.fraud_reason}
                                     </span>
@@ -3032,6 +4377,17 @@ export default function App() {
                                     </span>
                                   )}
                                 </td>
+                                {isDispatcher && (
+                                  <td>
+                                    <button
+                                      className="btn btn-secondary"
+                                      style={{ padding: '4px 8px', fontSize: '12px' }}
+                                      onClick={() => handleStartEditFuelLog(log)}
+                                    >
+                                      Edit / Audit
+                                    </button>
+                                  </td>
+                                )}
                               </tr>
                             );
                           })
@@ -3044,8 +4400,169 @@ export default function App() {
               </div>
             )}
 
+            {/* TAB: RECONCILIATION & FINANCIAL AUDITS */}
+            {activeTab === 'reconciliation' && isDispatcher && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                
+                {/* Header card with summary stats */}
+                {(() => {
+                  const completedTrips = trips.filter(t => t.status === 'completed');
+                  const flaggedTrips = completedTrips.filter(t => t.payout_status === 'hold_audit');
+                  const releasedTrips = completedTrips.filter(t => t.payout_status === 'approved');
+                  const pendingTrips = completedTrips.filter(t => t.payout_status === 'pending');
+
+                  return (
+                    <div className="metrics-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                      <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+                        <div style={{ fontSize: '20px' }}>⚖️</div>
+                        <div className="metric-label">Audited Trips</div>
+                        <div className="metric-value" style={{ color: '#fff', fontSize: '22px' }}>
+                          {completedTrips.length}
+                        </div>
+                      </div>
+                      
+                      <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', border: flaggedTrips.length > 0 ? '1px solid var(--accent-red)' : '1px solid var(--border-color)' }}>
+                        <div style={{ fontSize: '20px' }}>🔒</div>
+                        <div className="metric-label">Payouts on Hold</div>
+                        <div className="metric-value" style={{ color: flaggedTrips.length > 0 ? 'var(--accent-red)' : 'var(--text-secondary)', fontSize: '22px' }}>
+                          {flaggedTrips.length}
+                        </div>
+                      </div>
+
+                      <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+                        <div style={{ fontSize: '20px' }}>⏳</div>
+                        <div className="metric-label">Pending Release</div>
+                        <div className="metric-value" style={{ color: 'var(--accent-cyan)', fontSize: '22px' }}>
+                          {pendingTrips.length}
+                        </div>
+                      </div>
+
+                      <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
+                        <div style={{ fontSize: '20px' }}>💸</div>
+                        <div className="metric-label">Released Earnings</div>
+                        <div className="metric-value" style={{ color: 'var(--accent-green)', fontSize: '22px' }}>
+                          {releasedTrips.length}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Main reconciliation panel */}
+                <div className="content-panel">
+                  <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                    <h3 className="panel-title" style={{ color: '#fff', margin: 0 }}>
+                      <AlertTriangle size={18} color="var(--accent-red)" />
+                      Mileage & Payout Reconciliation Board
+                    </h3>
+                  </div>
+
+                  <div className="table-container">
+                    <table className="dashboard-table">
+                      <thead>
+                        <tr>
+                          <th>Trip ID</th>
+                          <th>Driver</th>
+                          <th>Planned Dist</th>
+                          <th>GPS Dist</th>
+                          <th>Odometer Dist</th>
+                          <th>Audit Result</th>
+                          <th>Payout Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const completedTrips = trips.filter(t => t.status === 'completed');
+                          if (completedTrips.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                                  No completed trips have been recorded yet to audit.
+                                </td>
+                              </tr>
+                            );
+                          }
+
+                          return completedTrips.map(trip => {
+                            const driverName = drivers.find(d => d.id === trip.driver_id)?.name || `Driver #${trip.driver_id}`;
+                            const isFlagged = trip.payout_status === 'hold_audit';
+                            
+                            let auditBadge = <span style={{ color: 'var(--accent-green)', fontSize: '11px', fontWeight: 600 }}>✓ Passed</span>;
+                            if (trip.audit_status === 'failed_gps_divergence') {
+                              auditBadge = <span style={{ color: 'var(--accent-red)', fontSize: '11px', fontWeight: 600 }}>⚠️ Route Detour (&gt;20%)</span>;
+                            } else if (trip.audit_status === 'failed_odo_mismatch') {
+                              auditBadge = <span style={{ color: 'var(--accent-red)', fontSize: '11px', fontWeight: 600 }}>⚠️ Odo Discrepancy</span>;
+                            }
+
+                            let payoutBadge = <span style={{ color: 'var(--accent-cyan)', fontSize: '11px', fontWeight: 600 }}>Pending Release</span>;
+                            if (trip.payout_status === 'hold_audit') {
+                              payoutBadge = <span style={{ color: 'var(--accent-red)', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>🔒 Hold (Audit)</span>;
+                            } else if (trip.payout_status === 'approved') {
+                              payoutBadge = <span style={{ color: 'var(--accent-green)', fontSize: '11px', fontWeight: 600 }}>✓ Released</span>;
+                            } else if (trip.payout_status === 'rejected') {
+                              payoutBadge = <span style={{ color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 600 }}>✗ Rejected</span>;
+                            }
+
+                            const handlePayoutAction = async (action: 'approve' | 'reject') => {
+                              try {
+                                const res = await apiFetch(`/trips/${trip.id}/payout-action`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify({ action })
+                                });
+                                showSuccess(res.message);
+                                loadData();
+                              } catch (err: any) {
+                                showError(err.message);
+                              }
+                            };
+
+                            return (
+                              <tr key={trip.id} style={{ borderLeft: isFlagged ? '4px solid var(--accent-red)' : 'none' }}>
+                                <td>#{trip.id}</td>
+                                <td>{driverName}</td>
+                                <td>{trip.distance_km ? `${trip.distance_km.toFixed(1)} km` : 'N/A'}</td>
+                                <td>{trip.gps_distance_km !== null ? `${trip.gps_distance_km.toFixed(1)} km` : 'N/A'}</td>
+                                <td>{trip.odo_distance_km !== null ? `${trip.odo_distance_km.toFixed(1)} km` : 'N/A'}</td>
+                                <td>{auditBadge}</td>
+                                <td>{payoutBadge}</td>
+                                <td>
+                                  {(trip.payout_status === 'hold_audit' || trip.payout_status === 'pending') ? (
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                      <button
+                                        className="btn btn-primary"
+                                        style={{ padding: '4px 8px', fontSize: '11px', backgroundColor: 'var(--accent-green)', border: 'none' }}
+                                        onClick={() => handlePayoutAction('approve')}
+                                      >
+                                        Approve
+                                      </button>
+                                      <button
+                                        className="btn btn-secondary"
+                                        style={{ padding: '4px 8px', fontSize: '11px', borderColor: 'var(--accent-red)', color: 'var(--accent-red)' }}
+                                        onClick={() => handlePayoutAction('reject')}
+                                      >
+                                        Reject
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Settled</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
             {/* TAB: PAYMENTS */}
             {activeTab === 'payments' && (
+
               <div className="content-panel">
                 <div className="panel-header">
                   <h2 className="panel-title">
@@ -3777,6 +5294,72 @@ export default function App() {
                 </button>
               </div>
 
+
+              {/* Recommendations Section */}
+              <div style={{ marginBottom: '20px', padding: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-cyan)' }}>🧠 Smart Match Recommendations</span>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ padding: '4px 10px', fontSize: '11px', backgroundColor: 'var(--accent-cyan)', color: '#000', border: 'none', fontWeight: 600 }}
+                    onClick={handleSmartMatch}
+                    disabled={loadingRecs || recommendations.length === 0}
+                  >
+                    Auto-Assign Best Match
+                  </button>
+                </div>
+
+                {loadingRecs ? (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Calculating compatibility scores...</div>
+                ) : recommendations.length === 0 ? (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>No suitable recommended drivers found.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {recommendations.map((rec, index) => {
+                      let scoreColor = 'var(--accent-green)';
+                      if (rec.score < 60) scoreColor = 'var(--accent-red)';
+                      else if (rec.score < 80) scoreColor = 'var(--accent-cyan)';
+
+                      return (
+                        <div key={rec.driver_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '6px' }}>
+                          <div style={{ flex: 1, marginRight: '8px' }}>
+                            <div style={{ fontSize: '12px', fontWeight: 600, color: '#fff' }}>
+                              {index + 1}. {rec.driver_name} 
+                              <span style={{ marginLeft: '8px', color: scoreColor, fontSize: '11px', fontWeight: 600 }}>{rec.score}% Match</span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                              {rec.reasons.join(' • ')}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '10px', height: 'fit-content' }}
+                            onClick={async () => {
+                              try {
+                                const payload: any = { driver_id: rec.driver_id };
+                                await apiFetch(`/trips/${assigningTripId}/assign`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify(payload)
+                                });
+                                showSuccess(`Assigned ${rec.driver_name} successfully!`);
+                                setAssigningTripId(null);
+                                loadData();
+                              } catch (err: any) {
+                                showError(err.message);
+                              }
+                            }}
+                          >
+                            Assign
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="form-group" style={{ marginBottom: '20px' }}>
                 <label className="form-label">Select Driver</label>
                 <select
@@ -3805,11 +5388,21 @@ export default function App() {
                   onChange={e => setAssignVehicleId(e.target.value)}
                 >
                   <option value="">-- Default (Driver's Assigned Vehicle) --</option>
-                  {vehicles.filter(v => v.status === 'active').map(vehicle => (
-                    <option key={vehicle.id} value={vehicle.id}>
-                      {vehicle.make} {vehicle.model} ({vehicle.license_plate})
-                    </option>
-                  ))}
+                  {vehicles.filter(v => v.status === 'active').map(vehicle => {
+                    const isOverdue = vehicle.is_service_overdue;
+                    const remaining = vehicle.next_service_due_odometer ? (vehicle.next_service_due_odometer - vehicle.odometer_km) : null;
+                    const isSoon = remaining !== null && remaining <= 500 && remaining > 0 && !isOverdue;
+                    const labelSuffix = isOverdue 
+                      ? ' - ⚠️ OVERDUE (Blocked)' 
+                      : isSoon 
+                        ? ` - ⚠️ DUE SOON (${Math.round(remaining)} km left)` 
+                        : '';
+                    return (
+                      <option key={vehicle.id} value={vehicle.id} disabled={isOverdue}>
+                        {vehicle.make} {vehicle.model} ({vehicle.license_plate}){labelSuffix}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -3833,6 +5426,129 @@ export default function App() {
           </div>
         )}
 
+        {/* MODAL: PRE-TRIP SAFETY INSPECTION */}
+        {showInspectionTripId !== null && (
+          <div className="modal-overlay">
+            <form className="modal-content" onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                const res = await apiFetch(`/trips/${showInspectionTripId}/inspection`, {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    brakes_passed: inspectionBrakes,
+                    tires_passed: inspectionTires,
+                    lights_passed: inspectionLights,
+                    steering_passed: inspectionSteering,
+                    fluids_passed: inspectionFluids,
+                    notes: inspectionNotes || null
+                  })
+                });
+                if (res.is_safe) {
+                  showSuccess("Pre-trip safety inspection passed! You can now start the trip.");
+                } else {
+                  showError("Safety inspection failed! The vehicle has been put in maintenance.");
+                }
+                setShowInspectionTripId(null);
+                setInspectionBrakes(true);
+                setInspectionTires(true);
+                setInspectionLights(true);
+                setInspectionSteering(true);
+                setInspectionFluids(true);
+                setInspectionNotes('');
+                loadData();
+              } catch (err: any) {
+                showError(err.message);
+              }
+            }} style={{ width: '480px' }}>
+              <div className="modal-header">
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Shield size={20} color="var(--accent-cyan)" /> Pre-Trip Safety Inspection
+                </h3>
+                <button type="button" className="modal-close" onClick={() => setShowInspectionTripId(null)}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px', lineHeight: 1.4 }}>
+                Please confirm that the vehicle is in safe operating condition. If any safety checks fail, the vehicle will be flagged for maintenance and starting the trip will be blocked.
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+                {[
+                  { id: 'brakes', label: 'Brakes Inspection', desc: 'Brake pads, response time, fluid level', state: inspectionBrakes, setter: setInspectionBrakes },
+                  { id: 'tires', label: 'Tires & Wheels', desc: 'Tread depth, tire pressure, no visible damage', state: inspectionTires, setter: setInspectionTires },
+                  { id: 'lights', label: 'Lights & Indicators', desc: 'Headlights, brake lights, turn signals functioning', state: inspectionLights, setter: setInspectionLights },
+                  { id: 'steering', label: 'Steering System', desc: 'No play, steering wheel alignment', state: inspectionSteering, setter: setInspectionSteering },
+                  { id: 'fluids', label: 'Fluids & Leaks', desc: 'Engine oil, coolant, wash fluid level', state: inspectionFluids, setter: setInspectionFluids }
+                ].map((item) => (
+                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.02)', padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-dim)' }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: '#fff', fontSize: '14px' }}>{item.label}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{item.desc}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: item.state ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                        {item.state ? 'PASSED' : 'FAILED'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => item.setter(!item.state)}
+                        style={{
+                          width: '42px',
+                          height: '24px',
+                          borderRadius: '12px',
+                          backgroundColor: item.state ? 'rgba(69,242,72,0.15)' : 'rgba(239,68,68,0.15)',
+                          border: `1px solid ${item.state ? 'var(--accent-green)' : 'var(--accent-red)'}`,
+                          position: 'relative',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          padding: 0
+                        }}
+                      >
+                        <div style={{
+                          width: '16px',
+                          height: '16px',
+                          borderRadius: '50%',
+                          backgroundColor: item.state ? 'var(--accent-green)' : 'var(--accent-red)',
+                          position: 'absolute',
+                          top: '3px',
+                          left: item.state ? '21px' : '3px',
+                          transition: 'all 0.2s'
+                        }} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '28px' }}>
+                <label className="form-label">Inspection Notes / Discrepancies</label>
+                <textarea
+                  className="form-textarea"
+                  value={inspectionNotes}
+                  onChange={e => setInspectionNotes(e.target.value)}
+                  placeholder="Describe any issues or notes about the vehicle condition..."
+                  rows={2}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowInspectionTripId(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" style={{
+                  backgroundColor: (inspectionBrakes && inspectionTires && inspectionLights && inspectionSteering && inspectionFluids) ? 'var(--accent-cyan)' : 'var(--accent-red)',
+                  border: 'none',
+                  color: '#000',
+                  fontWeight: 600
+                }}>
+                  Submit Inspection Report
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
         {/* MODAL: TRIP TRANSITION NOTES */}
         {transitioningTrip !== null && (
           <div className="modal-overlay">
@@ -3845,6 +5561,21 @@ export default function App() {
                   <X size={20} />
                 </button>
               </div>
+
+              {transitioningTrip.action === 'complete' && (
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label className="form-label">Ending Odometer Reading (km) *</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    className="form-input"
+                    required
+                    value={transitionOdometer}
+                    onChange={e => setTransitionOdometer(e.target.value)}
+                    placeholder="e.g. 5200.5"
+                  />
+                </div>
+              )}
 
               <div className="form-group" style={{ marginBottom: '28px' }}>
                 <label className="form-label">Transition Note (Optional)</label>
@@ -3959,11 +5690,21 @@ export default function App() {
                   onChange={e => setEditDriverVehicleId(e.target.value)}
                 >
                   <option value="">-- No Vehicle Assigned --</option>
-                  {vehicles.map(v => (
-                    <option key={v.id} value={v.id}>
-                      {v.make} {v.model} ({v.license_plate})
-                    </option>
-                  ))}
+                  {vehicles.map(vehicle => {
+                    const isOverdue = vehicle.is_service_overdue;
+                    const remaining = vehicle.next_service_due_odometer ? (vehicle.next_service_due_odometer - vehicle.odometer_km) : null;
+                    const isSoon = remaining !== null && remaining <= 500 && remaining > 0 && !isOverdue;
+                    const labelSuffix = isOverdue 
+                      ? ' - ⚠️ OVERDUE' 
+                      : isSoon 
+                        ? ` - ⚠️ DUE SOON (${Math.round(remaining)} km left)` 
+                        : '';
+                    return (
+                      <option key={vehicle.id} value={vehicle.id}>
+                        {vehicle.make} {vehicle.model} ({vehicle.license_plate}){labelSuffix}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -4253,11 +5994,21 @@ export default function App() {
                   onChange={e => setNewDriverData({ ...newDriverData, vehicle_id: e.target.value })}
                 >
                   <option value="">-- No Vehicle Assigned --</option>
-                  {vehicles.map(v => (
-                    <option key={v.id} value={v.id}>
-                      {v.make} {v.model} ({v.license_plate})
-                    </option>
-                  ))}
+                  {vehicles.map(vehicle => {
+                    const isOverdue = vehicle.is_service_overdue;
+                    const remaining = vehicle.next_service_due_odometer ? (vehicle.next_service_due_odometer - vehicle.odometer_km) : null;
+                    const isSoon = remaining !== null && remaining <= 500 && remaining > 0 && !isOverdue;
+                    const labelSuffix = isOverdue 
+                      ? ' - ⚠️ OVERDUE' 
+                      : isSoon 
+                        ? ` - ⚠️ DUE SOON (${Math.round(remaining)} km left)` 
+                        : '';
+                    return (
+                      <option key={vehicle.id} value={vehicle.id}>
+                        {vehicle.make} {vehicle.model} ({vehicle.license_plate}){labelSuffix}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -4267,6 +6018,140 @@ export default function App() {
                 </button>
                 <button type="submit" className="btn btn-primary">
                   Save Driver Profile
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* MODAL: EDIT FUEL LOG */}
+        {editingFuelLog && (
+          <div className="modal-overlay">
+            <form className="modal-content" onSubmit={handleUpdateFuelLog} style={{ width: '480px' }}>
+              <div className="modal-header">
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Edit / Resolve Fuel Log Entry</h3>
+                <button type="button" className="modal-close" onClick={() => setEditingFuelLog(null)}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Trip ID</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={editingFuelLog.trip_id || ''}
+                  onChange={e => setEditingFuelLog({ ...editingFuelLog, trip_id: e.target.value })}
+                  placeholder="e.g. 1"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Fuel Refueled (Liters / kWh) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="form-input"
+                  required
+                  value={editingFuelLog.liters_refueled}
+                  onChange={e => {
+                    const liters = e.target.value;
+                    let updatedLog = { ...editingFuelLog, liters_refueled: liters };
+                    if (liters && dieselRates) {
+                      const cityRate = editDieselCity === 'national_average'
+                        ? (dieselRates.national_average || 97.83)
+                        : (dieselRates.cities[editDieselCity] || dieselRates.national_average || 97.83);
+                      updatedLog.cost = (parseFloat(liters) * cityRate).toFixed(2);
+                    }
+                    setEditingFuelLog(updatedLog);
+                  }}
+                />
+              </div>
+
+              {dieselRates && (
+                <div className="form-group">
+                  <label className="form-label">Diesel Pricing City (India)</label>
+                  <select
+                    className="form-select"
+                    value={editDieselCity}
+                    onChange={e => {
+                      const city = e.target.value;
+                      setEditDieselCity(city);
+                      if (editingFuelLog.liters_refueled && dieselRates) {
+                        const cityRate = city === 'national_average'
+                          ? (dieselRates.national_average || 97.83)
+                          : (dieselRates.cities[city] || dieselRates.national_average || 97.83);
+                        const calculatedCost = (parseFloat(editingFuelLog.liters_refueled) * cityRate).toFixed(2);
+                        setEditingFuelLog((prev: any) => ({ ...prev, cost: calculatedCost }));
+                      }
+                    }}
+                  >
+                    <option value="national_average">National Average (₹{dieselRates.national_average?.toFixed(2)})</option>
+                    {Object.entries(dieselRates.cities).map(([name, price]: any) => (
+                      <option key={name} value={name}>{name} (₹{price.toFixed(2)})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="form-group">
+                <label className="form-label">Total Cost (₹) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="form-input"
+                  required
+                  value={editingFuelLog.cost}
+                  onChange={e => setEditingFuelLog({ ...editingFuelLog, cost: e.target.value })}
+                />
+                {dieselRates && editingFuelLog.liters_refueled && (
+                  <span style={{ fontSize: '11px', color: 'var(--accent-cyan)', marginTop: '4px', display: 'block' }}>
+                    Calculated using {editDieselCity === 'national_average' ? 'National Average' : editDieselCity} rate: ₹{((editDieselCity === 'national_average' ? dieselRates.national_average : dieselRates.cities[editDieselCity]) || 97.83).toFixed(2)}/L
+                  </span>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Odometer Reading (km)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  className="form-input"
+                  required
+                  value={editingFuelLog.odometer}
+                  onChange={e => setEditingFuelLog({ ...editingFuelLog, odometer: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Security Audit Status</label>
+                <select
+                  className="form-select"
+                  value={editingFuelLog.is_flagged_fraud ? 'true' : 'false'}
+                  onChange={e => setEditingFuelLog({ ...editingFuelLog, is_flagged_fraud: e.target.value === 'true' })}
+                >
+                  <option value="false">✓ Verified Compliant</option>
+                  <option value="true">⚠️ Flagged Fraud</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Audit Note / Fraud Reason</label>
+                <textarea
+                  className="form-input"
+                  style={{ minHeight: '80px', resize: 'vertical' }}
+                  value={editingFuelLog.fraud_reason || ''}
+                  onChange={e => setEditingFuelLog({ ...editingFuelLog, fraud_reason: e.target.value })}
+                  placeholder="Explain resolution or reasoning for fraud flag..."
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setEditingFuelLog(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Save Changes
                 </button>
               </div>
             </form>
@@ -4469,6 +6354,76 @@ export default function App() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* MODAL: COMPLETE WORKSHOP MAINTENANCE */}
+        {completingMaintenanceLog !== null && (
+          <div className="modal-overlay">
+            <form className="modal-content" onSubmit={handleCompleteMaintenanceSubmit} style={{ width: '460px' }}>
+              <div className="modal-header">
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  ⚙️ Complete Workshop Service & Release
+                </h3>
+                <button type="button" className="modal-close" onClick={() => setCompletingMaintenanceLog(null)}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid var(--border-dim)' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Service Type:</span>
+                <div style={{ fontWeight: 600, color: '#fff', fontSize: '14.5px', textTransform: 'uppercase' }}>
+                  {completingMaintenanceLog.service_type.replace('_', ' ')}
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  Opened: {new Date(completingMaintenanceLog.service_date).toLocaleString()}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Final Service Cost (INR) *</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  required
+                  value={completeMaintenanceData.cost}
+                  onChange={e => setCompleteMaintenanceData({ ...completeMaintenanceData, cost: e.target.value })}
+                  min="0"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Next Service Due (Odometer km)</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={completeMaintenanceData.next_service_due_odometer}
+                  onChange={e => setCompleteMaintenanceData({ ...completeMaintenanceData, next_service_due_odometer: e.target.value })}
+                  placeholder="e.g. 15000"
+                  min="0"
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '24px' }}>
+                <label className="form-label">Final Resolution Summary / Description</label>
+                <textarea
+                  className="form-textarea"
+                  value={completeMaintenanceData.description}
+                  onChange={e => setCompleteMaintenanceData({ ...completeMaintenanceData, description: e.target.value })}
+                  placeholder="Provide details of works completed, parts replaced..."
+                  rows={3}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setCompletingMaintenanceLog(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" style={{ backgroundColor: 'var(--accent-green)', color: '#000', border: 'none', fontWeight: 600 }}>
+                  ✓ Submit Completion & Release Asset
+                </button>
+              </div>
+            </form>
           </div>
         )}
 

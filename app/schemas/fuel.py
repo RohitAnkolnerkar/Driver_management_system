@@ -8,6 +8,19 @@ class FuelLogCreate(BaseModel):
     liters_refueled: float
     cost: float
     odometer: float
+    driver_id: Optional[int] = None
+    trip_id: int
+    is_personal_two_wheeler: Optional[bool] = False
+
+
+class FuelLogUpdate(BaseModel):
+    liters_refueled: Optional[float] = None
+    cost: Optional[float] = None
+    odometer: Optional[float] = None
+    is_flagged_fraud: Optional[bool] = None
+    fraud_reason: Optional[str] = None
+    is_personal_two_wheeler: Optional[bool] = None
+    trip_id: Optional[int] = None
 
 
 class FuelLogResponse(BaseModel):
@@ -18,6 +31,8 @@ class FuelLogResponse(BaseModel):
     odometer: float
     is_flagged_fraud: bool
     fraud_reason: Optional[str] = None
+    is_personal_two_wheeler: bool
+    trip_id: Optional[int] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,5 +1,3 @@
-import datetime
-
 from sqlalchemy import (
     Column,
     DateTime,
@@ -11,6 +9,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
+from app.core.time_utils import get_now_ist_naive
 from app.db import Base
 
 
@@ -23,7 +22,7 @@ class Driver(Base):
     status = Column(String, default="available")  # available, on_trip, inactive
     license_number = Column(String)
     license_expiry = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=get_now_ist_naive)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     current_latitude = Column(Float, nullable=True)
@@ -59,7 +58,7 @@ class DriverAvailabilityHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
     status = Column(String, nullable=False)
-    changed_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    changed_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
     note = Column(String, nullable=True)
 
     driver = relationship("Driver", back_populates="availability_history")
@@ -73,7 +72,7 @@ class DriverLocationHistory(Base):
     trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True, index=True)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
-    recorded_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    recorded_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
 
     driver = relationship("Driver", backref="location_history")
     trip = relationship("Trip", backref="location_history")
@@ -95,7 +94,7 @@ class DriverPayment(Base):
     paid_at = Column(DateTime, nullable=True)
     payment_method = Column(String, nullable=True)
     note = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=get_now_ist_naive)
 
     driver = relationship("Driver", backref="payments")
 

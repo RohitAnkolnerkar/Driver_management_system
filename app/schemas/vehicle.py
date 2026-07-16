@@ -43,6 +43,7 @@ class MaintenanceLogBase(BaseModel):
     cost: float = 0.0
     odometer_at_service: float
     service_date: datetime
+    completed_at: Optional[datetime] = None
     next_service_due_odometer: Optional[float] = None
 
 
@@ -52,6 +53,13 @@ class MaintenanceLogCreate(BaseModel):
     cost: Optional[float] = 0.0
     odometer_at_service: float
     service_date: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    next_service_due_odometer: Optional[float] = None
+
+
+class MaintenanceLogComplete(BaseModel):
+    cost: float
+    description: Optional[str] = None
     next_service_due_odometer: Optional[float] = None
 
 

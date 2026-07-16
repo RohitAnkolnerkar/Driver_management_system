@@ -8,6 +8,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: constr(min_length=8, max_length=72)
     role: str = "dispatcher"
+    phone: Optional[str] = None
 
 
 class UserResponse(BaseModel):

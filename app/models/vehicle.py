@@ -1,8 +1,7 @@
-import datetime
-
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
+from app.core.time_utils import get_now_ist_naive
 from app.db import Base
 
 
@@ -18,7 +17,7 @@ class Vehicle(Base):
     status = Column(
         String, default="active", nullable=False
     )  # active, maintenance, inactive
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
 
     assigned_driver = relationship(
         "Driver",
@@ -42,9 +41,10 @@ class MaintenanceLog(Base):
     description = Column(String, nullable=True)
     cost = Column(Float, default=0.0, nullable=False)
     odometer_at_service = Column(Float, nullable=False)
-    service_date = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    service_date = Column(DateTime, default=get_now_ist_naive, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
     next_service_due_odometer = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
 
     vehicle = relationship("Vehicle", back_populates="maintenance_logs")
 

@@ -67,6 +67,7 @@ class DriverResponse(BaseModel):
     vehicle_type: Optional[str] = "cargo_truck"
     odometer_km: Optional[float] = 0.0
     vehicle_id: Optional[int] = None
+    active_hours_last_24h: float = 0.0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -175,6 +176,39 @@ class DriverLeaderboardResponse(BaseModel):
     total_duration_minutes: int
     average_speed_kmh: float
     on_time_rate: float
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DriverScorecardResponse(BaseModel):
+    driver_id: int
+    name: str
+    phone: str
+    year: int
+    month: int
+    # Trip Completion KPIs
+    total_trips: int
+    completed_trips: int
+    cancelled_trips: int
+    completion_rate: float  # 0-100
+    cancellation_rate: float  # 0-100
+    # Punctuality KPI
+    on_time_pickup_rate: float  # 0-100 (arrived at source before scheduled_date)
+    # Audit / Compliance KPI
+    audit_pass_rate: float  # 0-100 (trips with audit_status = "passed")
+    flagged_trips: int
+    # Fatigue Compliance KPI
+    fatigue_incidents: int  # days where driver exceeded 8h driving
+    # Earnings KPIs
+    total_earnings: float
+    average_fare: float
+    total_distance_km: float
+    # Overall Score (0-100, weighted average)
+    overall_score: float
+    # Incentive Recommendation
+    bonus_recommendation: float
+    deduction_recommendation: float
+    incentive_note: str
 
     model_config = ConfigDict(from_attributes=True)
 

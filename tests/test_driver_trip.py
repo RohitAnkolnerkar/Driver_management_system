@@ -243,12 +243,14 @@ def test_dispatch_board_returns_pending_trips_and_available_drivers(client):
 
 
 def test_list_trips_by_source_company_and_date(client):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
 
     create_user(client)
     token = get_token(client)
 
-    future_date = datetime.utcnow() + timedelta(days=5)
+    future_date = get_now_ist_naive() + timedelta(days=5)
     future_date_str = future_date.strftime("%Y-%m-%dT10:00:00")
     future_date_only_str = future_date.strftime("%Y-%m-%d")
 
@@ -1063,12 +1065,14 @@ def test_get_trips_created_date_filters(client):
 
 
 def test_regular_trip_recurs_on_non_sunday(client):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
 
     create_user(client)
     token = get_token(client)
 
-    now = datetime.utcnow()
+    now = get_now_ist_naive()
     days_ahead = 0 - now.weekday()
     if days_ahead <= 2:
         days_ahead += 7
@@ -1101,12 +1105,14 @@ def test_regular_trip_recurs_on_non_sunday(client):
 
 
 def test_regular_trip_does_not_show_on_sunday(client):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
 
     create_user(client)
     token = get_token(client)
 
-    now = datetime.utcnow()
+    now = get_now_ist_naive()
     days_ahead = 0 - now.weekday()
     if days_ahead <= 2:
         days_ahead += 7
@@ -1774,7 +1780,9 @@ def test_reassign_driver_expired_license_fails(client):
 
 
 def test_get_expired_or_expiring_drivers_alerts(client):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
 
     create_user(client)
     token = get_token(client)
@@ -1792,7 +1800,7 @@ def test_get_expired_or_expiring_drivers_alerts(client):
         token,
         name="Soon Expiry",
         phone="5550002222",
-        license_expiry=(datetime.utcnow() + timedelta(days=5)).strftime(
+        license_expiry=(get_now_ist_naive() + timedelta(days=5)).strftime(
             "%Y-%m-%dT00:00:00"
         ),
     )
@@ -1802,7 +1810,7 @@ def test_get_expired_or_expiring_drivers_alerts(client):
         token,
         name="Later Expiry",
         phone="5550003333",
-        license_expiry=(datetime.utcnow() + timedelta(days=40)).strftime(
+        license_expiry=(get_now_ist_naive() + timedelta(days=40)).strftime(
             "%Y-%m-%dT00:00:00"
         ),
     )
@@ -1820,8 +1828,9 @@ def test_get_expired_or_expiring_drivers_alerts(client):
 
 
 def test_auto_assign_chooses_longest_available(client, db_session):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
+    from app.core.time_utils import get_now_ist_naive
     from app.models.driver import Driver, DriverAvailabilityHistory
 
     create_user(client)
@@ -1840,12 +1849,12 @@ def test_auto_assign_chooses_longest_available(client, db_session):
     h1 = DriverAvailabilityHistory(
         driver_id=driver1.id,
         status="available",
-        changed_at=datetime.utcnow() - timedelta(hours=2),
+        changed_at=get_now_ist_naive() - timedelta(hours=2),
     )
     h2 = DriverAvailabilityHistory(
         driver_id=driver2.id,
         status="available",
-        changed_at=datetime.utcnow() - timedelta(hours=1),
+        changed_at=get_now_ist_naive() - timedelta(hours=1),
     )
     db_session.add_all([h1, h2])
     db_session.commit()
@@ -1867,8 +1876,9 @@ def test_auto_assign_chooses_longest_available(client, db_session):
 
 
 def test_auto_assign_ignores_expired_license(client, db_session):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
+    from app.core.time_utils import get_now_ist_naive
     from app.models.driver import Driver, DriverAvailabilityHistory
 
     create_user(client)
@@ -1898,12 +1908,12 @@ def test_auto_assign_ignores_expired_license(client, db_session):
     h1 = DriverAvailabilityHistory(
         driver_id=driver1.id,
         status="available",
-        changed_at=datetime.utcnow() - timedelta(hours=2),
+        changed_at=get_now_ist_naive() - timedelta(hours=2),
     )
     h2 = DriverAvailabilityHistory(
         driver_id=driver2.id,
         status="available",
-        changed_at=datetime.utcnow() - timedelta(hours=1),
+        changed_at=get_now_ist_naive() - timedelta(hours=1),
     )
     db_session.add_all([h1, h2])
     db_session.commit()
@@ -2921,8 +2931,9 @@ def test_list_trips_filtering_by_destination_company(client):
 
 
 def test_trip_auto_distance_and_duration_calculation(client, db_session):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
+    from app.core.time_utils import get_now_ist_naive
     from app.models.driver import DriverLocationHistory
     from app.models.trip import Trip
 
@@ -2971,7 +2982,7 @@ def test_trip_auto_distance_and_duration_calculation(client, db_session):
 
     # Set start_time manually
     trip_db = db_session.query(Trip).filter(Trip.id == trip_id).first()
-    trip_db.start_time = datetime.utcnow() - timedelta(minutes=45)
+    trip_db.start_time = get_now_ist_naive() - timedelta(minutes=45)
     db_session.commit()
 
     # Add some location history points
@@ -2980,14 +2991,14 @@ def test_trip_auto_distance_and_duration_calculation(client, db_session):
         trip_id=trip_id,
         latitude=19.0,
         longitude=72.0,
-        recorded_at=datetime.utcnow() - timedelta(minutes=40),
+        recorded_at=get_now_ist_naive() - timedelta(minutes=40),
     )
     p2 = DriverLocationHistory(
         driver_id=driver_id,
         trip_id=trip_id,
         latitude=19.1,
         longitude=72.1,
-        recorded_at=datetime.utcnow() - timedelta(minutes=20),
+        recorded_at=get_now_ist_naive() - timedelta(minutes=20),
     )
     db_session.add(p1)
     db_session.add(p2)
@@ -3245,9 +3256,10 @@ def test_get_trip_location_history(client, db_session):
 
 
 def test_hybrid_vehicle_assignment(client, db_session):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from app.core.security import hash_password
+    from app.core.time_utils import get_now_ist_naive
     from app.models.driver import Driver
     from app.models.trip import Trip
     from app.models.user import User
@@ -3301,7 +3313,7 @@ def test_hybrid_vehicle_assignment(client, db_session):
         phone="9988776655",
         status="available",
         license_number="DL-12-2018-9999999",
-        license_expiry=datetime.utcnow() + timedelta(days=100),
+        license_expiry=get_now_ist_naive() + timedelta(days=100),
         user_id=driver_user.id,
         vehicle_id=vehicle_a.id,
         vehicle_type="cargo_truck",
@@ -3363,10 +3375,11 @@ def test_hybrid_vehicle_assignment(client, db_session):
 
 
 def test_sms_notification_on_assignment(client, db_session):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     from unittest.mock import patch
 
     from app.core.security import hash_password
+    from app.core.time_utils import get_now_ist_naive
     from app.models.driver import Driver
     from app.models.user import User
 
@@ -3399,7 +3412,7 @@ def test_sms_notification_on_assignment(client, db_session):
         phone="9988776655",
         status="available",
         license_number="DL-12-2018-8888888",
-        license_expiry=datetime.utcnow() + timedelta(days=100),
+        license_expiry=get_now_ist_naive() + timedelta(days=100),
         user_id=driver_user.id,
         vehicle_type="cargo_truck",
     )
@@ -3481,10 +3494,11 @@ def test_indian_license_validation(client, db_session):
 
 
 def test_trip_speed_warning(client, db_session):
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     from unittest.mock import patch
 
     from app.core.security import hash_password
+    from app.core.time_utils import get_now_ist_naive
     from app.models.driver import Driver
     from app.models.user import User
 
@@ -3517,7 +3531,7 @@ def test_trip_speed_warning(client, db_session):
         phone="9988776655",
         status="available",
         license_number="DL-12-2018-1111111",
-        license_expiry=datetime.utcnow() + timedelta(days=100),
+        license_expiry=get_now_ist_naive() + timedelta(days=100),
         user_id=driver_user.id,
         vehicle_type="cargo_truck",
     )

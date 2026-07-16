@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
@@ -7,11 +7,15 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
 from app.api.driver import record_driver_status_change
+from app.config import settings
 from app.core.sms import send_sms
+from app.core.time_utils import IST, get_now_ist, get_now_ist_naive
 from app.db import get_db
 from app.models.driver import Driver, DriverAvailabilityHistory, DriverLocationHistory
+from app.models.inspection import PreTripInspection
 from app.models.trip import Trip, TripHistory
-from app.models.vehicle import Vehicle
+from app.models.vehicle import MaintenanceLog, Vehicle
+from app.schemas.inspection import PreTripInspectionCreate, PreTripInspectionResponse
 from app.schemas.trip import (
     AssignDriver,
     BulkTripAssignmentRequest,
@@ -164,9 +168,9 @@ def create_trip(
     trip_data = trip.dict()
     if trip.scheduled_date is not None:
         scheduled = trip.scheduled_date
-        now = datetime.now(timezone.utc)
+        now = get_now_ist()
         if scheduled.tzinfo is None:
-            scheduled = scheduled.replace(tzinfo=timezone.utc)
+            scheduled = scheduled.replace(tzinfo=IST)
         if scheduled < now:
             raise HTTPException(
                 status_code=422, detail="scheduled_date cannot be in the past"
@@ -274,6 +278,47 @@ def estimate_trip_fare(
     }
 
 
+def check_trip_delay_risk(trip: Trip) -> bool:
+    if trip.status != "assigned":
+        return False
+    if trip.arrived_at_source_time is not None:
+        return False
+    if trip.scheduled_date is None:
+        return False
+
+    import math
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
+
+    now = get_now_ist_naive()
+    if now >= (trip.scheduled_date - timedelta(minutes=15)):
+        if (
+            trip.driver
+            and trip.driver.current_latitude is not None
+            and trip.driver.current_longitude is not None
+            and trip.source_latitude is not None
+            and trip.source_longitude is not None
+        ):
+            lat1 = math.radians(trip.driver.current_latitude)
+            lon1 = math.radians(trip.driver.current_longitude)
+            lat2 = math.radians(trip.source_latitude)
+            lon2 = math.radians(trip.source_longitude)
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            dist = 6371.0 * c
+            if dist > 0.2:
+                return True
+        else:
+            return True
+    return False
+
+
 @router.get("/", response_model=list[TripResponse])
 def list_trips(
     limit: int = 50,
@@ -297,6 +342,8 @@ def list_trips(
     query = db.query(Trip).options(selectinload(Trip.driver))
 
     if current_user.role == "driver":
+        if not current_user.driver_profile:
+            return []
         query = query.filter(Trip.driver_id == current_user.driver_profile.id)
 
     if status:
@@ -345,7 +392,10 @@ def list_trips(
             )
 
     query = query.order_by(Trip.created_at.desc())
-    return query.offset(offset).limit(limit).all()
+    trips = query.offset(offset).limit(limit).all()
+    for t in trips:
+        t.delay_risk = check_trip_delay_risk(t)
+    return trips
 
 
 @router.get("/dispatch/queue", response_model=list[TripResponse])
@@ -436,6 +486,17 @@ def get_trip_stats(
 ):
     base_query = db.query(Trip)
     if current_user.role == "driver":
+        if not current_user.driver_profile:
+            return {
+                "total_trips": 0,
+                "created_trips": 0,
+                "assigned_trips": 0,
+                "started_trips": 0,
+                "completed_trips": 0,
+                "cancelled_trips": 0,
+                "total_estimated_fare": 0.0,
+                "average_estimated_fare": 0.0,
+            }
         base_query = base_query.filter(Trip.driver_id == current_user.driver_profile.id)
 
     filters = []
@@ -649,6 +710,7 @@ def get_trip(
     )
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
+    trip.delay_risk = check_trip_delay_risk(trip)
     return trip
 
 
@@ -746,6 +808,38 @@ def update_trip(
     return trip
 
 
+def is_vehicle_service_overdue(vehicle, db: Session) -> bool:
+    latest = (
+        db.query(MaintenanceLog)
+        .filter(MaintenanceLog.vehicle_id == vehicle.id)
+        .order_by(MaintenanceLog.service_date.desc())
+        .first()
+    )
+    if latest:
+        next_service = latest.next_service_due_odometer
+        return (next_service is not None) and (vehicle.odometer_km >= next_service)
+    return vehicle.odometer_km >= 10000.0
+
+
+def get_driver_fatigue_hours(driver, db: Session):
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
+
+    cutoff = get_now_ist_naive() - timedelta(hours=24)
+    recent_trips = (
+        db.query(Trip)
+        .filter(
+            Trip.driver_id == driver.id,
+            Trip.status == "completed",
+            Trip.end_time >= cutoff,
+        )
+        .all()
+    )
+    total_minutes = sum(t.duration_minutes or 0 for t in recent_trips)
+    return total_minutes / 60.0
+
+
 @router.post("/bulk-assign", response_model=BulkTripAssignmentResponse)
 def bulk_assign_trips(
     data: BulkTripAssignmentRequest,
@@ -760,7 +854,7 @@ def bulk_assign_trips(
     if not driver:
         raise HTTPException(404, "Driver not found")
 
-    if driver.license_expiry and driver.license_expiry < datetime.utcnow():
+    if driver.license_expiry and driver.license_expiry < get_now_ist_naive():
         raise HTTPException(400, "Driver's license is expired")
 
     if driver.status != "available":
@@ -825,11 +919,22 @@ def assign_driver(
     if not driver:
         raise HTTPException(404, "Driver not found")
 
-    if driver.license_expiry and driver.license_expiry < datetime.utcnow():
+    if driver.license_expiry and driver.license_expiry < get_now_ist_naive():
         raise HTTPException(400, "Driver's license is expired")
 
     if driver.status != "available":
         raise HTTPException(400, "Driver is not available")
+
+    # Driver fatigue safety lockout validation
+    fatigue_hours = get_driver_fatigue_hours(driver, db)
+    if fatigue_hours > 8.0:
+        raise HTTPException(
+            400,
+            (
+                "Driver has exceeded daily driving limit of 8 hours "
+                f"({round(fatigue_hours, 1)} hrs logged in last 24h)"
+            ),
+        )
 
     is_new_assignment = trip.driver_id != driver.id
 
@@ -838,9 +943,27 @@ def assign_driver(
         vehicle = db.query(Vehicle).filter(Vehicle.id == data.vehicle_id).first()
         if not vehicle:
             raise HTTPException(status_code=404, detail="Vehicle not found")
+        if vehicle.status == "maintenance":
+            raise HTTPException(400, "Vehicle is currently in maintenance")
+        if is_vehicle_service_overdue(vehicle, db):
+            raise HTTPException(
+                400, f"Vehicle {vehicle.license_plate} is overdue for maintenance"
+            )
         trip.vehicle_id = vehicle.id
     elif driver.vehicle_id:
-        trip.vehicle_id = driver.vehicle_id
+        vehicle = db.query(Vehicle).filter(Vehicle.id == driver.vehicle_id).first()
+        if vehicle:
+            if vehicle.status == "maintenance":
+                raise HTTPException(
+                    400, f"Driver's vehicle {vehicle.license_plate} is in maintenance"
+                )
+            if is_vehicle_service_overdue(vehicle, db):
+                raise HTTPException(
+                    400,
+                    f"Driver's vehicle {vehicle.license_plate} is "
+                    "overdue for maintenance",
+                )
+            trip.vehicle_id = driver.vehicle_id
     trip.status = "assigned"
 
     driver.status = "on_trip"
@@ -884,7 +1007,7 @@ def reassign_driver(
     if not new_driver:
         raise HTTPException(404, "Driver not found")
 
-    if new_driver.license_expiry and new_driver.license_expiry < datetime.utcnow():
+    if new_driver.license_expiry and new_driver.license_expiry < get_now_ist_naive():
         raise HTTPException(400, "Driver's license is expired")
 
     if new_driver.status != "available":
@@ -971,7 +1094,7 @@ def auto_assign_driver(
             Driver.status == "available",
             or_(
                 Driver.license_expiry.is_(None),
-                Driver.license_expiry >= datetime.utcnow(),
+                Driver.license_expiry >= get_now_ist_naive(),
             ),
         )
         .outerjoin(latest_available, Driver.id == latest_available.c.driver_id)
@@ -1017,6 +1140,136 @@ def auto_assign_driver(
     }
 
 
+@router.post("/{trip_id}/inspection", response_model=PreTripInspectionResponse)
+def submit_pre_trip_inspection(
+    trip_id: int,
+    inspection_in: PreTripInspectionCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    # Permissions check: Only assigned driver or dispatchers/admins
+    if current_user.role == "driver":
+        if not trip.driver or trip.driver.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the assigned driver can submit this safety inspection",
+            )
+    elif current_user.role not in ["admin", "dispatcher"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions",
+        )
+
+    if trip.status not in ["assigned", "created"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Safety inspection can only be submitted for "
+                "pending or assigned trips"
+            ),
+        )
+
+    driver_id = trip.driver_id
+    vehicle_id = trip.vehicle_id
+
+    if not driver_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Trip must have an assigned driver to perform inspection",
+        )
+    if not vehicle_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Trip must have an assigned vehicle to perform inspection",
+        )
+
+    # Check if inspection already exists
+    existing = (
+        db.query(PreTripInspection).filter(PreTripInspection.trip_id == trip_id).first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Pre-trip inspection has already been submitted for this trip",
+        )
+
+    is_safe = (
+        inspection_in.brakes_passed
+        and inspection_in.tires_passed
+        and inspection_in.lights_passed
+        and inspection_in.steering_passed
+        and inspection_in.fluids_passed
+    )
+
+    inspection = PreTripInspection(
+        trip_id=trip_id,
+        driver_id=driver_id,
+        vehicle_id=vehicle_id,
+        brakes_passed=inspection_in.brakes_passed,
+        tires_passed=inspection_in.tires_passed,
+        lights_passed=inspection_in.lights_passed,
+        steering_passed=inspection_in.steering_passed,
+        fluids_passed=inspection_in.fluids_passed,
+        is_safe=is_safe,
+        notes=inspection_in.notes,
+    )
+    db.add(inspection)
+
+    if not is_safe:
+        # Flag the vehicle for maintenance
+        vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+        if vehicle:
+            vehicle.status = "maintenance"
+            m_log = MaintenanceLog(
+                vehicle_id=vehicle.id,
+                service_type="inspection",
+                description=(
+                    f"Safety inspection failed for Trip ID {trip_id}. Notes: "
+                    f"{inspection_in.notes or 'None'}"
+                ),
+                cost=0.0,
+                odometer_at_service=vehicle.odometer_km,
+            )
+            db.add(m_log)
+
+    db.commit()
+    db.refresh(inspection)
+    return inspection
+
+
+@router.get("/{trip_id}/inspection", response_model=PreTripInspectionResponse)
+def get_pre_trip_inspection(
+    trip_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if current_user.role == "driver":
+        if not trip.driver or trip.driver.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the assigned driver can view this safety inspection",
+            )
+
+    inspection = (
+        db.query(PreTripInspection).filter(PreTripInspection.trip_id == trip_id).first()
+    )
+    if not inspection:
+        raise HTTPException(
+            status_code=404,
+            detail="Pre-trip inspection not found for this trip",
+        )
+
+    return inspection
+
+
 @router.patch("/{trip_id}/start")
 def start_trip(
     trip_id: int,
@@ -1038,8 +1291,54 @@ def start_trip(
                 status_code=403, detail="Only the assigned driver may start this trip"
             )
 
+    if trip.driver:
+        fatigue_hours = get_driver_fatigue_hours(trip.driver, db)
+        if fatigue_hours > 8.0:
+            raise HTTPException(
+                400,
+                (
+                    f"Driver has exceeded daily driving limit of 8 hours "
+                    f"({round(fatigue_hours, 1)} hrs logged in last 24h)"
+                ),
+            )
+
+    # Pre-trip safety inspection validation
+    if settings.MANDATORY_SAFETY_INSPECTION:
+        inspection = (
+            db.query(PreTripInspection)
+            .filter(PreTripInspection.trip_id == trip.id)
+            .first()
+        )
+        if not inspection:
+            raise HTTPException(
+                400,
+                "Pre-trip safety inspection is required before starting the trip",
+            )
+        if not inspection.is_safe:
+            raise HTTPException(
+                400,
+                (
+                    "Cannot start trip: vehicle failed safety inspection "
+                    "and must be serviced"
+                ),
+            )
+
+    if trip.vehicle:
+        if trip.vehicle.status == "maintenance":
+            raise HTTPException(400, "Vehicle is currently in maintenance")
+        if is_vehicle_service_overdue(trip.vehicle, db):
+            raise HTTPException(
+                400,
+                f"Vehicle {trip.vehicle.license_plate} is overdue for maintenance",
+            )
+
     trip.status = "started"
-    trip.start_time = datetime.utcnow()
+    trip.start_time = get_now_ist_naive()
+    if trip.driver:
+        trip.start_odometer = trip.driver.odometer_km
+    elif trip.vehicle:
+        trip.start_odometer = trip.vehicle.odometer_km
+
     note = data.note if data else None
     if not note:
         note = "trip started"
@@ -1066,6 +1365,8 @@ def complete_trip(
     if trip.status != "started":
         raise HTTPException(400, "Trip not started")
 
+    original_planned_distance = float(trip.distance_km or 0.0)
+
     if current_user.role == "driver":
         if not trip.driver or trip.driver.user_id != current_user.id:
             raise HTTPException(
@@ -1074,7 +1375,7 @@ def complete_trip(
             )
 
     trip.status = "completed"
-    trip.end_time = datetime.utcnow()
+    trip.end_time = get_now_ist_naive()
 
     # Calculate actual duration in minutes if start_time is set
     # and duration is > 10 seconds
@@ -1153,13 +1454,24 @@ def complete_trip(
         if driver:
             driver.status = "available"
 
-            dist = trip.distance_km or 0.0
-            driver.odometer_km = (driver.odometer_km or 0.0) + dist
-            if trip.vehicle:
-                trip.vehicle.odometer_km = (trip.vehicle.odometer_km or 0.0) + dist
-            elif driver.vehicle:
-                driver.vehicle.odometer_km = (driver.vehicle.odometer_km or 0.0) + dist
+            # 1. Update odometer based on end odometer input or fallback distance
+            if data and data.odometer is not None:
+                driver.odometer_km = data.odometer
+                if trip.vehicle:
+                    trip.vehicle.odometer_km = data.odometer
+                elif driver.vehicle:
+                    driver.vehicle.odometer_km = data.odometer
+            else:
+                dist = trip.distance_km or 0.0
+                driver.odometer_km = (driver.odometer_km or 0.0) + dist
+                if trip.vehicle:
+                    trip.vehicle.odometer_km = (trip.vehicle.odometer_km or 0.0) + dist
+                elif driver.vehicle:
+                    driver.vehicle.odometer_km = (
+                        driver.vehicle.odometer_km or 0.0
+                    ) + dist
 
+            dist = trip.distance_km or 0.0
             EMISSION_RATES = {
                 "light_van": 0.18,
                 "cargo_truck": 0.31,
@@ -1178,21 +1490,70 @@ def complete_trip(
                 dist * CONSUMPTION_RATES.get(v_type, 0.12), 2
             )
 
+    # 2. Populate Audit Fields on Trip
+    trip.gps_distance_km = round(actual_distance, 2) if actual_distance > 0.0 else 0.0
+    if data and data.odometer is not None:
+        trip.end_odometer = data.odometer
+        if trip.start_odometer is not None:
+            trip.odo_distance_km = round(
+                max(0.0, float(trip.end_odometer) - float(trip.start_odometer)), 2
+            )
+
+    # 3. Reconciliation Logic
+    audit_status = "passed"
+    payout_status = "pending"
+
+    # Check 1: GPS Route Divergence
+    if (
+        original_planned_distance > 0.0
+        and trip.gps_distance_km
+        and trip.gps_distance_km > 0.0
+    ):
+        ratio = trip.gps_distance_km / original_planned_distance
+        if ratio > settings.RECONCILE_GPS_RATIO_LIMIT:
+            audit_status = "failed_gps_divergence"
+            payout_status = "hold_audit"
+
+    # Check 2: Odometer vs GPS (if GPS exists) or Odometer vs Planned (if GPS is 0)
+    if audit_status == "passed" and trip.odo_distance_km is not None:
+        if trip.gps_distance_km and trip.gps_distance_km > 0.0:
+            diff = abs(trip.odo_distance_km - trip.gps_distance_km)
+            if (
+                diff > settings.RECONCILE_ODO_GPS_DIFF_LIMIT
+                and (diff / trip.gps_distance_km) > settings.RECONCILE_ODO_GPS_PCT_LIMIT
+            ):
+                audit_status = "failed_odo_mismatch"
+                payout_status = "hold_audit"
+        elif original_planned_distance > 0.0:
+            diff = abs(trip.odo_distance_km - original_planned_distance)
+            if (
+                diff > settings.RECONCILE_ODO_PLAN_DIFF_LIMIT
+                and (diff / original_planned_distance)
+                > settings.RECONCILE_ODO_PLAN_PCT_LIMIT
+            ):
+                audit_status = "failed_odo_mismatch"
+                payout_status = "hold_audit"
+
+    trip.audit_status = audit_status
+    trip.payout_status = payout_status
+
     db.commit()
 
     avg_speed = 0.0
     warning_text = None
     if trip.duration_minutes and trip.duration_minutes > 0 and trip.distance_km:
         avg_speed = trip.distance_km / (trip.duration_minutes / 60.0)
-        if avg_speed > 60.0:
+        limit = settings.SPEED_LIMIT_THRESHOLD
+        if avg_speed > limit:
             warning_text = (
                 f"Warning: Average speed of {round(avg_speed, 1)} km/h "
-                f"exceeds 60 km/h limit!"
+                f"exceeds {int(limit)} km/h limit!"
             )
             if trip.driver and trip.driver.phone:
                 warning_msg = (
                     f"Warning: Your average speed of {round(avg_speed, 1)} km/h "
-                    f"for Trip ID {trip.id} exceeded the speed limit of 60 km/h. "
+                    f"for Trip ID {trip.id} exceeded the speed limit "
+                    f"of {int(limit)} km/h. "
                     f"Please drive safely!"
                 )
                 background_tasks.add_task(send_sms, trip.driver.phone, warning_msg)
@@ -1419,3 +1780,235 @@ def discard_trip(
     db.commit()
 
     return {"message": "Trip discarded"}
+
+
+@router.patch("/{trip_id}/payout-action")
+def update_trip_payout(
+    trip_id: int,
+    action: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(404, "Trip not found")
+
+    if action == "approve":
+        trip.payout_status = "approved"
+    elif action == "reject":
+        trip.payout_status = "rejected"
+    else:
+        raise HTTPException(400, "Invalid payout action. Must be 'approve' or 'reject'")
+
+    db.commit()
+    return {
+        "message": f"Payout status updated to {trip.payout_status}",
+        "payout_status": trip.payout_status,
+    }
+
+
+def calculate_match_score(driver: Driver, trip: Trip, db: Session):
+    score = 0.0
+    reasons = []
+
+    # 1. Driver status check (must be available)
+    if driver.status != "available":
+        return 0, [f"Driver is not available (Status: {driver.status})"]
+    else:
+        score += 20.0
+        reasons.append("Driver is available")
+
+    # 2. Proximity calculation (Max 40 points)
+    if (
+        driver.current_latitude is not None
+        and driver.current_longitude is not None
+        and trip.source_latitude is not None
+        and trip.source_longitude is not None
+    ):
+        import math
+
+        lat1 = math.radians(driver.current_latitude)
+        lon1 = math.radians(driver.current_longitude)
+        lat2 = math.radians(trip.source_latitude)
+        lon2 = math.radians(trip.source_longitude)
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        distance_km = 6371.0 * c
+
+        proximity_score = max(0.0, 40.0 * (1 - distance_km / 50.0))
+        score += proximity_score
+        reasons.append(f"Near Origin ({round(distance_km, 1)} km away)")
+    else:
+        score += 20.0
+        reasons.append("No live location coordinates available")
+
+    # 3. Vehicle compatibility & maintenance check (Max 20 points)
+    if driver.vehicle_id:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == driver.vehicle_id).first()
+        if vehicle:
+            is_overdue = is_vehicle_service_overdue(vehicle, db)
+            is_in_maintenance = vehicle.status == "maintenance"
+            if is_in_maintenance or is_overdue:
+                score -= 30.0
+                reasons.append("Linked vehicle overdue/in maintenance")
+            else:
+                latest_log = (
+                    db.query(MaintenanceLog)
+                    .filter(MaintenanceLog.vehicle_id == vehicle.id)
+                    .order_by(MaintenanceLog.service_date.desc())
+                    .first()
+                )
+                next_service = (
+                    latest_log.next_service_due_odometer if latest_log else 10000.0
+                )
+                if next_service is not None and (
+                    next_service - vehicle.odometer_km <= 500.0
+                ):
+                    # Service due soon: no readiness bonus and add warning reason
+                    remaining = next_service - vehicle.odometer_km
+                    reasons.append(
+                        f"Linked vehicle service due soon ({round(remaining)} km left)"
+                    )
+                else:
+                    score += 10.0
+                    reasons.append("Vehicle ready")
+
+    if trip.vehicle_id:
+        if driver.vehicle_id == trip.vehicle_id:
+            score += 20.0
+            reasons.append("Assigned to the required vehicle")
+        else:
+            score -= 15.0
+            reasons.append("Not linked to the required vehicle")
+    else:
+        if driver.vehicle_id:
+            score += 10.0
+            reasons.append(f"Vehicle linked ({driver.vehicle_type.replace('_', ' ')})")
+        else:
+            score += 5.0
+            reasons.append("No active vehicle linked")
+
+    # 4. Fatigue compliance (Max 20 points)
+    from datetime import timedelta
+
+    from app.core.time_utils import get_now_ist_naive
+
+    cutoff = get_now_ist_naive() - timedelta(hours=24)
+    recent_trips = (
+        db.query(Trip)
+        .filter(
+            Trip.driver_id == driver.id,
+            Trip.status == "completed",
+            Trip.end_time >= cutoff,
+        )
+        .all()
+    )
+
+    total_minutes = sum(t.duration_minutes or 0 for t in recent_trips)
+    total_hours = total_minutes / 60.0
+
+    if total_hours > 8.0:
+        return 0, [
+            "Driver locked out - Fatigue limit reached "
+            f"({round(total_hours, 1)} hrs logged in last 24h)"
+        ]
+
+    if total_hours <= 4.0:
+        score += 20.0
+        reasons.append(f"Low fatigue ({round(total_hours, 1)} hrs driven)")
+    elif total_hours <= 7.0:
+        score += 10.0
+        reasons.append(f"Moderate fatigue ({round(total_hours, 1)} hrs driven)")
+    elif total_hours <= 8.0:
+        score += 5.0
+        reasons.append(f"High fatigue ({round(total_hours, 1)} hrs driven)")
+    else:
+        score += 0.0
+        reasons.append(f"Over shift limit ({round(total_hours, 1)} hrs driven)")
+
+    final_score = max(0, min(100, int(score)))
+    return final_score, reasons
+
+
+@router.get("/{trip_id}/match-recommendations")
+def get_trip_match_recommendations(
+    trip_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(404, "Trip not found")
+
+    drivers = db.query(Driver).all()
+
+    recommendations = []
+    for d in drivers:
+        score, reasons = calculate_match_score(d, trip, db)
+        recommendations.append(
+            {
+                "driver_id": d.id,
+                "driver_name": d.name,
+                "phone": d.phone,
+                "vehicle_type": d.vehicle_type,
+                "score": score,
+                "reasons": reasons,
+                "status": d.status,
+            }
+        )
+
+    recommendations.sort(key=lambda x: x["score"], reverse=True)
+    return recommendations[:3]
+
+
+@router.post("/{trip_id}/smart-match")
+def smart_match_trip(
+    trip_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(404, "Trip not found")
+
+    if trip.status not in {"created", "assigned"}:
+        raise HTTPException(400, "Trip cannot be matched after starting or completion")
+
+    drivers = db.query(Driver).all()
+    if not drivers:
+        raise HTTPException(404, "No drivers found in the system")
+
+    scored_drivers = []
+    for d in drivers:
+        score, _ = calculate_match_score(d, trip, db)
+        if d.status == "available":
+            scored_drivers.append((score, d))
+
+    if not scored_drivers:
+        raise HTTPException(400, "No available drivers found to match")
+
+    scored_drivers.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_driver = scored_drivers[0]
+
+    trip.driver_id = best_driver.id
+    trip.status = "assigned"
+    best_driver.status = "on_trip"
+
+    if not trip.vehicle_id and best_driver.vehicle_id:
+        trip.vehicle_id = best_driver.vehicle_id
+
+    db.commit()
+    return {
+        "message": (
+            "Successfully auto-matched and assigned "
+            f"Trip #{trip.id} to {best_driver.name}"
+        ),
+        "driver_id": best_driver.id,
+        "driver_name": best_driver.name,
+        "score": best_score,
+    }

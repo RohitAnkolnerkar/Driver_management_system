@@ -4,6 +4,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.driver import DriverResponse
+from app.schemas.inspection import PreTripInspectionResponse
 
 
 class TripCreate(BaseModel):
@@ -106,6 +107,15 @@ class TripResponse(BaseModel):
     source_longitude: Optional[float] = None
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
+    gps_distance_km: Optional[float] = None
+    start_odometer: Optional[float] = None
+    end_odometer: Optional[float] = None
+    odo_distance_km: Optional[float] = None
+    audit_status: str = "passed"
+    payout_status: str = "pending"
+    arrived_at_source_time: Optional[datetime] = None
+    delay_risk: bool = False
+    pre_trip_inspection: Optional[PreTripInspectionResponse] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -168,6 +178,7 @@ class TripFareEstimateResponse(BaseModel):
 
 class TripTransitionRequest(BaseModel):
     note: Optional[str] = None
+    odometer: Optional[float] = None
 
 
 class TripLocationResponse(BaseModel):

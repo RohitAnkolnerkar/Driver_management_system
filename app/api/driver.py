@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
+from app.core.time_utils import get_now_ist_naive
 from app.db import get_db
 from app.models.driver import (
     Driver,
@@ -15,7 +16,7 @@ from app.models.driver import (
     DriverLocationHistory,
     DriverPayment,
 )
-from app.models.trip import Trip
+from app.models.trip import Trip, TripHistory
 from app.schemas.driver import (
     DispatcherWorkloadSummaryResponse,
     DriverAvailabilityAnalyticsResponse,
@@ -31,6 +32,7 @@ from app.schemas.driver import (
     DriverPaymentUpdate,
     DriverPerformanceResponse,
     DriverResponse,
+    DriverScorecardResponse,
     DriverStatus,
     DriverUpdate,
 )
@@ -78,14 +80,14 @@ def update_driver_location(
 
     driver.current_latitude = location_update.latitude
     driver.current_longitude = location_update.longitude
-    driver.last_location_update = datetime.utcnow()
+    driver.last_location_update = get_now_ist_naive()
 
     # Log to location history
     history_entry = DriverLocationHistory(
         driver_id=driver.id,
         latitude=location_update.latitude,
         longitude=location_update.longitude,
-        recorded_at=datetime.utcnow(),
+        recorded_at=get_now_ist_naive(),
     )
     db.add(history_entry)
 
@@ -128,6 +130,43 @@ def update_driver_location(
                 near_destination = True
                 active_trip_id = active_trip.id
                 active_trip_destination = active_trip.destination
+
+    # Check for assigned trip (to record check-in at source geofence)
+    assigned_trip = (
+        db.query(Trip)
+        .filter(Trip.driver_id == driver.id, Trip.status == "assigned")
+        .first()
+    )
+
+    if assigned_trip:
+        src_lat = assigned_trip.source_latitude
+        src_lng = assigned_trip.source_longitude
+        if src_lat is not None and src_lng is not None:
+            lat1 = math.radians(location_update.latitude)
+            lon1 = math.radians(location_update.longitude)
+            lat2 = math.radians(src_lat)
+            lon2 = math.radians(src_lng)
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            dist = 6371.0 * c  # distance in km
+
+            # Within 200 metres (0.2 km), record arrived_at_source_time
+            # if not already set
+            if dist <= 0.2 and assigned_trip.arrived_at_source_time is None:
+                assigned_trip.arrived_at_source_time = get_now_ist_naive()
+                history_entry_trip = TripHistory(
+                    trip_id=assigned_trip.id,
+                    status=assigned_trip.status,
+                    note="driver arrived at source geofence (auto-checkin)",
+                )
+                db.add(history_entry_trip)
 
     db.commit()
     db.refresh(driver)
@@ -197,25 +236,58 @@ def create_driver(
                 status_code=400, detail="Username or email already registered"
             )
 
+    existing_driver = None
+    if user_id:
+        existing_driver = db.query(Driver).filter(Driver.user_id == user_id).first()
+
     license_num = driver.license_number
     if license_num:
         license_num = validate_indian_license(license_num)
 
-    driver_data = {
-        "name": driver.name,
-        "phone": driver.phone,
-        "license_number": license_num,
-        "license_expiry": driver.license_expiry,
-        "user_id": user_id,
-        "base_salary": driver.base_salary,
-        "commission_percentage": driver.commission_percentage,
-        "vehicle_type": driver.vehicle_type,
-        "odometer_km": driver.odometer_km,
-        "vehicle_id": driver.vehicle_id,
-    }
+    if existing_driver:
+        existing_driver.name = driver.name
+        existing_driver.phone = driver.phone
+        existing_driver.license_number = license_num
+        existing_driver.license_expiry = driver.license_expiry
+        if driver.base_salary is not None:
+            existing_driver.base_salary = driver.base_salary
+        if driver.commission_percentage is not None:
+            existing_driver.commission_percentage = driver.commission_percentage
+        if driver.vehicle_type is not None:
+            existing_driver.vehicle_type = driver.vehicle_type
+        if driver.odometer_km is not None:
+            existing_driver.odometer_km = driver.odometer_km
+        if driver.vehicle_id is not None:
+            existing_driver.vehicle_id = driver.vehicle_id
+        db_driver = existing_driver
+    else:
+        driver_data = {
+            "name": driver.name,
+            "phone": driver.phone,
+            "license_number": license_num,
+            "license_expiry": driver.license_expiry,
+            "user_id": user_id,
+            "base_salary": (
+                driver.base_salary if driver.base_salary is not None else 0.0
+            ),
+            "commission_percentage": (
+                driver.commission_percentage
+                if driver.commission_percentage is not None
+                else 100.0
+            ),
+            "vehicle_type": (
+                driver.vehicle_type
+                if driver.vehicle_type is not None
+                else "cargo_truck"
+            ),
+            "odometer_km": (
+                driver.odometer_km if driver.odometer_km is not None else 0.0
+            ),
+            "vehicle_id": driver.vehicle_id,
+        }
+        db_driver = Driver(**driver_data)
+        db.add(db_driver)
 
-    db_driver = Driver(**driver_data)
-    db.add(db_driver)
     try:
         db.flush()
         record_driver_status_change(
@@ -252,6 +324,21 @@ def create_driver(
                 status_code=400, detail="Driver with this phone already exists"
             )
         raise HTTPException(status_code=400, detail="Database integrity error")
+
+
+def calculate_driver_fatigue_hours(driver_id: int, db: Session) -> float:
+    cutoff = get_now_ist_naive() - timedelta(hours=24)
+    recent_trips = (
+        db.query(Trip)
+        .filter(
+            Trip.driver_id == driver_id,
+            Trip.status == "completed",
+            Trip.end_time >= cutoff,
+        )
+        .all()
+    )
+    total_minutes = sum(t.duration_minutes or 0 for t in recent_trips)
+    return float(total_minutes) / 60.0
 
 
 @router.get("/", response_model=list[DriverResponse])
@@ -298,7 +385,10 @@ def get_drivers(
         query = query.filter(Driver.license_expiry >= license_expiry_after)
 
     query = query.order_by(Driver.created_at.desc())
-    return query.offset(offset).limit(limit).all()
+    drivers = query.offset(offset).limit(limit).all()
+    for d in drivers:
+        d.active_hours_last_24h = calculate_driver_fatigue_hours(d.id, db)
+    return drivers
 
 
 @router.get("/dashboard/summary")
@@ -316,7 +406,7 @@ def get_dashboard_summary(
     )
     completed_trips = db.query(Trip).filter(Trip.status == "completed").count()
     cancelled_trips = db.query(Trip).filter(Trip.status == "cancelled").count()
-    today = datetime.utcnow().date()
+    today = get_now_ist_naive().date()
     total_trips_today = (
         db.query(Trip).filter(func.date(Trip.created_at) == today).count()
     )
@@ -331,6 +421,157 @@ def get_dashboard_summary(
         "cancelled_trips": cancelled_trips,
         "total_trips_today": total_trips_today,
     }
+
+
+@router.get("/scorecard", response_model=list[DriverScorecardResponse])
+def get_driver_scorecards(
+    year: int = None,
+    month: int = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    """
+    Compute monthly KPI scorecards for all drivers.
+    Includes: completion rate, on-time pickup rate, audit pass rate,
+    fatigue incidents, earnings, and incentive recommendations.
+    """
+    now = get_now_ist_naive()
+    if year is None:
+        year = now.year
+    if month is None:
+        month = now.month
+
+    period_start = datetime(year, month, 1, 0, 0, 0)
+    if month == 12:
+        period_end = datetime(year + 1, 1, 1, 0, 0, 0)
+    else:
+        period_end = datetime(year, month + 1, 1, 0, 0, 0)
+
+    drivers = db.query(Driver).all()
+    results = []
+
+    for driver in drivers:
+        # All trips in the period
+        period_trips = (
+            db.query(Trip)
+            .filter(
+                Trip.driver_id == driver.id,
+                Trip.created_at >= period_start,
+                Trip.created_at < period_end,
+            )
+            .all()
+        )
+
+        if not period_trips:
+            continue
+
+        completed = [t for t in period_trips if t.status == "completed"]
+        cancelled = [t for t in period_trips if t.status == "cancelled"]
+        total = len(period_trips)
+        n_completed = len(completed)
+        n_cancelled = len(cancelled)
+
+        completion_rate = round((n_completed / total) * 100, 1) if total else 0.0
+        cancellation_rate = round((n_cancelled / total) * 100, 1) if total else 0.0
+
+        # On-time pickup: trips where arrived_at_source_time <= scheduled_date
+        scheduled_trips = [t for t in completed if t.scheduled_date is not None]
+        on_time = [
+            t
+            for t in scheduled_trips
+            if t.arrived_at_source_time is not None
+            and t.arrived_at_source_time <= t.scheduled_date
+        ]
+        on_time_pickup_rate = (
+            round((len(on_time) / len(scheduled_trips)) * 100, 1)
+            if scheduled_trips
+            else 100.0
+        )
+
+        # Audit pass rate
+        audited = [t for t in completed if t.audit_status in ("passed", "flagged")]
+        passed = [t for t in audited if t.audit_status == "passed"]
+        audit_pass_rate = (
+            round((len(passed) / len(audited)) * 100, 1) if audited else 100.0
+        )
+        flagged_trips = len(audited) - len(passed)
+
+        # Fatigue incidents: days where cumulative duration > 8h
+        from collections import defaultdict
+
+        daily_minutes: dict = defaultdict(int)
+        for t in completed:
+            if t.start_time and t.duration_minutes:
+                day_key = t.start_time.date()
+                daily_minutes[day_key] += t.duration_minutes
+        fatigue_incidents = sum(1 for mins in daily_minutes.values() if mins > 480)
+
+        # Earnings
+        total_earnings = sum(t.estimated_fare or 0.0 for t in completed)
+        average_fare = (total_earnings / n_completed) if n_completed else 0.0
+        total_distance_km = sum(t.distance_km or 0.0 for t in completed)
+
+        # Overall Score — weighted KPI composite
+        # (out of 100)
+        # completion_rate: 30%, on_time_pickup: 25%, audit_pass: 25%,
+        # fatigue penalty: 20%
+        fatigue_score = max(0.0, 100.0 - (fatigue_incidents * 15.0))
+        overall_score = round(
+            (completion_rate * 0.30)
+            + (on_time_pickup_rate * 0.25)
+            + (audit_pass_rate * 0.25)
+            + (fatigue_score * 0.20),
+            1,
+        )
+
+        # Incentive recommendation
+        bonus = 0.0
+        deduction = 0.0
+        if overall_score >= 90:
+            bonus = round(total_earnings * 0.10, 2)
+            note = "🏆 Exceptional performance — 10% earnings bonus recommended"
+        elif overall_score >= 75:
+            bonus = round(total_earnings * 0.05, 2)
+            note = "✅ Good performance — 5% earnings bonus recommended"
+        elif overall_score >= 60:
+            note = "📊 Satisfactory — no bonus or deduction"
+        elif overall_score >= 40:
+            deduction = round(total_earnings * 0.05, 2)
+            note = "⚠️ Below average — 5% commission deduction recommended"
+        else:
+            deduction = round(total_earnings * 0.10, 2)
+            note = (
+                "🚨 Poor performance — performance review + 10% deduction recommended"
+            )
+
+        results.append(
+            DriverScorecardResponse(
+                driver_id=driver.id,
+                name=driver.name,
+                phone=driver.phone,
+                year=year,
+                month=month,
+                total_trips=total,
+                completed_trips=n_completed,
+                cancelled_trips=n_cancelled,
+                completion_rate=completion_rate,
+                cancellation_rate=cancellation_rate,
+                on_time_pickup_rate=on_time_pickup_rate,
+                audit_pass_rate=audit_pass_rate,
+                flagged_trips=flagged_trips,
+                fatigue_incidents=fatigue_incidents,
+                total_earnings=round(total_earnings, 2),
+                average_fare=round(average_fare, 2),
+                total_distance_km=round(total_distance_km, 2),
+                overall_score=overall_score,
+                bonus_recommendation=bonus,
+                deduction_recommendation=deduction,
+                incentive_note=note,
+            )
+        )
+
+    results.sort(key=lambda x: x.overall_score, reverse=True)
+    return results
 
 
 @router.get("/leaderboard", response_model=list[DriverLeaderboardResponse])
@@ -429,7 +670,7 @@ def get_dispatcher_workload_summary(
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
-    today = datetime.utcnow().date()
+    today = get_now_ist_naive().date()
 
     # Driver statistics (1 query)
     driver_stats = db.query(
@@ -488,7 +729,7 @@ def get_expired_or_expiring_drivers(
 ):
     from datetime import timedelta
 
-    thirty_days_later = datetime.utcnow() + timedelta(days=30)
+    thirty_days_later = get_now_ist_naive() + timedelta(days=30)
 
     drivers = (
         db.query(Driver)
@@ -514,6 +755,7 @@ def get_my_driver_profile(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
+    driver.active_hours_last_24h = calculate_driver_fatigue_hours(driver.id, db)
     return driver
 
 
@@ -608,9 +850,24 @@ def generate_driver_payment(
     completed_trips = trips_query.all()
     total_fares = sum(float(t.estimated_fare or 0.0) for t in completed_trips)
 
+    from app.models.fuel import FuelLog
+
+    personal_fuel_deductions = (
+        db.query(func.sum(FuelLog.cost))
+        .filter(
+            FuelLog.driver_id == driver_id,
+            FuelLog.is_personal_two_wheeler.is_(True),
+            FuelLog.created_at >= start_date,
+            FuelLog.created_at <= end_date,
+        )
+        .scalar()
+        or 0.0
+    )
+
     commission = total_fares * (driver.commission_percentage / 100.0)
     base_salary_payout = driver.base_salary
-    total_paid = base_salary_payout + commission
+    deductions_val = float(personal_fuel_deductions)
+    total_paid = base_salary_payout + commission - deductions_val
 
     db_payment = DriverPayment(
         driver_id=driver_id,
@@ -619,7 +876,7 @@ def generate_driver_payment(
         base_salary_paid=base_salary_payout,
         commission_paid=commission,
         bonus=0.0,
-        deductions=0.0,
+        deductions=deductions_val,
         total_paid=total_paid,
         status="pending",
     )
@@ -657,7 +914,7 @@ def update_driver_payment(
     if payment_update.status is not None:
         payment.status = payment_update.status
         if payment_update.status == "paid":
-            payment.paid_at = datetime.utcnow()
+            payment.paid_at = get_now_ist_naive()
     if payment_update.payment_method is not None:
         payment.payment_method = payment_update.payment_method
     if payment_update.note is not None:
@@ -711,6 +968,7 @@ def get_driver(
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
+    driver.active_hours_last_24h = calculate_driver_fatigue_hours(driver.id, db)
     return driver
 
 
@@ -1002,7 +1260,7 @@ def get_driver_availability_analytics(
     available_minutes = 0
     on_trip_minutes = 0
     inactive_minutes = 0
-    now = datetime.utcnow()
+    now = get_now_ist_naive()
 
     for index, entry in enumerate(history):
         if index == len(history) - 1:
@@ -1063,7 +1321,7 @@ def get_driver_daily_availability_analytics(
     )
 
     daily_groups = {}
-    now = datetime.utcnow()
+    now = get_now_ist_naive()
 
     for index, entry in enumerate(history):
         if index == len(history) - 1:

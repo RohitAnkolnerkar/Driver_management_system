@@ -1,8 +1,7 @@
-import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
+from app.core.time_utils import get_now_ist_naive
 from app.db import Base
 
 
@@ -26,6 +25,13 @@ class Trip(Base):
     cancel_reason = Column(String, nullable=True)
     fuel_consumed_liters = Column(Float, nullable=True)
     carbon_emissions_kg = Column(Float, nullable=True)
+    gps_distance_km = Column(Float, nullable=True)
+    start_odometer = Column(Float, nullable=True)
+    end_odometer = Column(Float, nullable=True)
+    odo_distance_km = Column(Float, nullable=True)
+    audit_status = Column(String, default="passed", nullable=False)
+    payout_status = Column(String, default="pending", nullable=False)
+
     source_company = Column(String, nullable=True)
     destination_company = Column(String, nullable=True)
     is_regular = Column(Boolean, nullable=False, default=False)
@@ -38,11 +44,18 @@ class Trip(Base):
 
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
+    arrived_at_source_time = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=get_now_ist_naive)
 
     driver = relationship("Driver", backref="trips")
     vehicle = relationship("Vehicle", backref="trips")
+    pre_trip_inspection = relationship(
+        "PreTripInspection",
+        uselist=False,
+        back_populates="trip",
+        cascade="all, delete-orphan",
+    )
     history = relationship(
         "TripHistory",
         back_populates="trip",
@@ -94,7 +107,7 @@ class TripHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False, index=True)
     status = Column(String, nullable=False)
-    changed_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    changed_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
     note = Column(String, nullable=True)
 
     trip = relationship("Trip", back_populates="history")

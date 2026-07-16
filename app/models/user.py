@@ -1,8 +1,7 @@
-import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.orm import relationship
 
+from app.core.time_utils import get_now_ist_naive
 from app.db import Base
 
 
@@ -15,7 +14,7 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     role = Column(String, nullable=False, default="dispatcher")
     is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=get_now_ist_naive)
 
     driver_profile = relationship(
         "Driver",
