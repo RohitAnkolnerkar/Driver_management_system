@@ -30,7 +30,7 @@ class Driver(Base):
     last_location_update = Column(DateTime, nullable=True)
 
     base_salary = Column(Float, default=0.0, nullable=False)
-    commission_percentage = Column(Float, default=100.0, nullable=False)
+    commission_percentage = Column(Float, default=0.0, nullable=False)
     vehicle_type = Column(String, default="cargo_truck", nullable=False)
     odometer_km = Column(Float, default=0.0, nullable=False)
     vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=True)
@@ -89,6 +89,8 @@ class DriverPayment(Base):
     commission_paid = Column(Float, nullable=False, default=0.0)
     bonus = Column(Float, nullable=False, default=0.0)
     deductions = Column(Float, nullable=False, default=0.0)
+    advance_payment = Column(Float, nullable=False, default=0.0)
+    personal_fuel_expense = Column(Float, nullable=False, default=0.0)
     total_paid = Column(Float, nullable=False, default=0.0)
     status = Column(String, nullable=False, default="pending")  # pending, paid
     paid_at = Column(DateTime, nullable=True)

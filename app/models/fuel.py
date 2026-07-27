@@ -15,7 +15,16 @@ class FuelLog(Base):
     odometer = Column(Float, nullable=False)
     is_flagged_fraud = Column(Boolean, default=False, nullable=False)
     fraud_reason = Column(String, nullable=True)
+    audit_status = Column(String, default="pending", nullable=False)
     is_personal_two_wheeler = Column(Boolean, default=False, nullable=False)
+    is_personal = Column(Boolean, default=False, nullable=False)
+
+    refuel_latitude = Column(Float, nullable=True)
+    refuel_longitude = Column(Float, nullable=True)
+    fuel_station_name = Column(String, nullable=True)
+    expected_consumption_liters = Column(Float, nullable=True)
+    variance_percentage = Column(Float, nullable=True)
+
     created_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
     trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True)
 

@@ -1,18 +1,30 @@
+import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.api.deps import get_db, require_roles
 from app.core.time_utils import get_now_ist_naive
 from app.models.driver import Driver
-from app.models.vehicle import MaintenanceLog, Vehicle
+from app.models.vehicle import MaintenanceLog, Vehicle, VehicleTollLog
+from app.schemas.toll import (
+    FleetTollSummaryResponse,
+    VehicleTollCreate,
+    VehicleTollResponse,
+    VehicleTollSummaryItem,
+)
 from app.schemas.vehicle import (
+    FleetTCOSummaryResponse,
     MaintenanceLogComplete,
     MaintenanceLogCreate,
     MaintenanceLogResponse,
+    PredictiveMaintenanceResponse,
     VehicleCreate,
     VehicleResponse,
+    VehicleTCOResponse,
     VehicleUpdate,
 )
 
@@ -46,6 +58,7 @@ def make_vehicle_response(vehicle: Vehicle, db: Session) -> VehicleResponse:
         license_plate=vehicle.license_plate,
         odometer_km=vehicle.odometer_km,
         status=vehicle.status,
+        fasttag_balance=vehicle.fasttag_balance,
         created_at=vehicle.created_at,
         assigned_driver_id=(
             vehicle.assigned_driver.id if vehicle.assigned_driver else None
@@ -79,6 +92,9 @@ def create_vehicle(
         .first()
     )
     if existing:
+        logger.warning(
+            f"Create vehicle failed: License plate '{vehicle_in.license_plate}' already exists"
+        )
         raise HTTPException(
             status_code=400,
             detail=(
@@ -200,6 +216,353 @@ def get_vehicles_utilization_analytics(
     return results
 
 
+def calculate_vehicle_predictive_health(
+    vehicle: Vehicle, db: Session
+) -> PredictiveMaintenanceResponse:
+    from datetime import timedelta
+
+    from app.models.inspection import PreTripInspection
+    from app.models.trip import Trip
+
+    now = get_now_ist_naive()
+    thirty_days_ago = now - timedelta(days=30)
+
+    latest_log = (
+        db.query(MaintenanceLog)
+        .filter(MaintenanceLog.vehicle_id == vehicle.id)
+        .order_by(MaintenanceLog.service_date.desc())
+        .first()
+    )
+
+    next_service = (
+        latest_log.next_service_due_odometer
+        if (latest_log and latest_log.next_service_due_odometer is not None)
+        else 10000.0
+    )
+    is_overdue = vehicle.odometer_km >= next_service
+    km_remaining = (
+        max(0.0, next_service - vehicle.odometer_km) if not is_overdue else 0.0
+    )
+
+    trips_30d = (
+        db.query(Trip)
+        .filter(
+            Trip.vehicle_id == vehicle.id,
+            Trip.status == "completed",
+            Trip.end_time >= thirty_days_ago,
+        )
+        .all()
+    )
+    total_km_30d = sum(float(t.distance_km or 0.0) for t in trips_30d)
+    avg_daily_km = round(total_km_30d / 30.0, 1)
+
+    est_days_remaining = None
+    if is_overdue:
+        est_days_remaining = 0.0
+    elif avg_daily_km > 0:
+        est_days_remaining = round(km_remaining / avg_daily_km, 1)
+
+    failed_inspections = (
+        db.query(PreTripInspection)
+        .filter(
+            PreTripInspection.vehicle_id == vehicle.id,
+            PreTripInspection.is_safe.is_(False),
+            PreTripInspection.created_at >= thirty_days_ago,
+        )
+        .count()
+    )
+
+    score = 100.0
+    recommendations = []
+
+    if is_overdue:
+        score -= 35.0
+        overdue_km = round(vehicle.odometer_km - next_service, 1)
+        recommendations.append(
+            f"Immediate service required! Overdue by {overdue_km} km."
+        )
+    elif km_remaining <= 500.0:
+        score -= 15.0
+        recommendations.append(f"Service due soon within {round(km_remaining, 1)} km.")
+
+    if failed_inspections > 0:
+        score -= min(30.0, failed_inspections * 10.0)
+        recommendations.append(
+            f"{failed_inspections} inspection failure(s) recorded in past 30 days."
+        )
+
+    age = now.year - vehicle.year
+    if age >= 10:
+        score -= 15.0
+        recommendations.append(
+            "High vehicle age (>= 10 years). Comprehensive check recommended."
+        )
+    elif age >= 7:
+        score -= 10.0
+        recommendations.append(
+            "Vehicle age exceeds 7 years. Regular check recommended."
+        )
+
+    if vehicle.odometer_km >= 150000:
+        score -= 10.0
+        recommendations.append(
+            "High cumulative odometer (> 150,000 km). Audit powertrain."
+        )
+
+    score = max(0.0, round(score, 1))
+
+    if score < 50.0 or is_overdue:
+        urgency = "CRITICAL"
+    elif score < 75.0 or km_remaining <= 500.0:
+        urgency = "WARNING"
+    else:
+        urgency = "GOOD"
+
+    if not recommendations:
+        recommendations.append("Vehicle in good operational health.")
+
+    return PredictiveMaintenanceResponse(
+        vehicle_id=vehicle.id,
+        license_plate=vehicle.license_plate,
+        make=vehicle.make,
+        model=vehicle.model,
+        health_score=score,
+        urgency_status=urgency,
+        is_service_overdue=is_overdue,
+        odometer_km=vehicle.odometer_km,
+        next_service_due_odometer=next_service,
+        km_remaining=round(km_remaining, 1),
+        avg_daily_km_30d=avg_daily_km,
+        estimated_days_remaining=est_days_remaining,
+        failed_inspections_count=failed_inspections,
+        recommendations=recommendations,
+    )
+
+
+def calculate_vehicle_tco(vehicle: Vehicle, db: Session) -> VehicleTCOResponse:
+    from app.models.fuel import FuelLog
+    from app.models.trip import Trip
+
+    m_logs = (
+        db.query(MaintenanceLog).filter(MaintenanceLog.vehicle_id == vehicle.id).all()
+    )
+    maint_cost = sum(float(log.cost or 0.0) for log in m_logs)
+
+    trips = (
+        db.query(Trip)
+        .filter(Trip.vehicle_id == vehicle.id, Trip.status == "completed")
+        .all()
+    )
+    total_km = sum(float(t.distance_km or 0.0) for t in trips)
+    if total_km == 0 and vehicle.odometer_km > 0:
+        total_km = float(vehicle.odometer_km)
+
+    op_revenue = sum(float(t.estimated_fare or 0.0) for t in trips)
+
+    trip_ids = [t.id for t in trips]
+    fuel_cost = 0.0
+    if trip_ids:
+        f_logs = db.query(FuelLog).filter(FuelLog.trip_id.in_(trip_ids)).all()
+        fuel_cost += sum(float(f.cost or 0.0) for f in f_logs)
+
+    if vehicle.assigned_driver:
+        unlinked_f_logs = (
+            db.query(FuelLog)
+            .filter(
+                FuelLog.driver_id == vehicle.assigned_driver.id,
+                FuelLog.trip_id.is_(None),
+            )
+            .all()
+        )
+        fuel_cost += sum(float(f.cost or 0.0) for f in unlinked_f_logs)
+
+    total_operating_cost = fuel_cost + maint_cost
+    net_profit = op_revenue - total_operating_cost
+
+    cost_per_km = round(total_operating_cost / total_km, 2) if total_km > 0 else 0.0
+    profit_per_km = round(net_profit / total_km, 2) if total_km > 0 else 0.0
+
+    if cost_per_km > 25.0:
+        rating = "HIGH_COST_MONEY_DRAINER"
+    elif cost_per_km > 12.0:
+        rating = "AVERAGE"
+    else:
+        rating = "EFFICIENT"
+
+    return VehicleTCOResponse(
+        vehicle_id=vehicle.id,
+        license_plate=vehicle.license_plate,
+        make=vehicle.make,
+        model=vehicle.model,
+        year=vehicle.year,
+        total_km_driven=round(total_km, 1),
+        fuel_cost=round(fuel_cost, 2),
+        maintenance_cost=round(maint_cost, 2),
+        operational_revenue=round(op_revenue, 2),
+        total_operating_cost=round(total_operating_cost, 2),
+        net_profit_loss=round(net_profit, 2),
+        cost_per_km=cost_per_km,
+        profit_per_km=profit_per_km,
+        efficiency_rating=rating,
+    )
+
+
+@router.get("/predictive-alerts", response_model=List[PredictiveMaintenanceResponse])
+def get_fleet_predictive_alerts(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    vehicles = db.query(Vehicle).all()
+    reports = [calculate_vehicle_predictive_health(v, db) for v in vehicles]
+    reports.sort(key=lambda r: (r.urgency_status != "CRITICAL", r.health_score))
+    return reports
+
+
+@router.get("/tco-summary", response_model=FleetTCOSummaryResponse)
+def get_fleet_tco_summary(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    vehicles = db.query(Vehicle).all()
+    vehicles_tco = [calculate_vehicle_tco(v, db) for v in vehicles]
+
+    total_km = sum(v.total_km_driven for v in vehicles_tco)
+    total_fuel = sum(v.fuel_cost for v in vehicles_tco)
+    total_maint = sum(v.maintenance_cost for v in vehicles_tco)
+    total_cost = sum(v.total_operating_cost for v in vehicles_tco)
+    total_rev = sum(v.operational_revenue for v in vehicles_tco)
+    net_profit = sum(v.net_profit_loss for v in vehicles_tco)
+    avg_cost_km = round(total_cost / total_km, 2) if total_km > 0 else 0.0
+
+    return FleetTCOSummaryResponse(
+        total_vehicles=len(vehicles),
+        fleet_total_km=round(total_km, 1),
+        fleet_fuel_cost=round(total_fuel, 2),
+        fleet_maintenance_cost=round(total_maint, 2),
+        fleet_total_cost=round(total_cost, 2),
+        fleet_total_revenue=round(total_rev, 2),
+        fleet_net_profit=round(net_profit, 2),
+        fleet_avg_cost_per_km=avg_cost_km,
+        vehicles_tco=vehicles_tco,
+    )
+
+
+@router.get(
+    "/{vehicle_id}/predictive-health",
+    response_model=PredictiveMaintenanceResponse,
+)
+def get_vehicle_predictive_health(
+    vehicle_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher", "driver")),
+):
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        logger.warning(
+            f"Get vehicle predictive health failed: Vehicle {vehicle_id} not found"
+        )
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    return calculate_vehicle_predictive_health(vehicle, db)
+
+
+@router.get("/{vehicle_id}/tco", response_model=VehicleTCOResponse)
+def get_vehicle_tco(
+    vehicle_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        logger.warning(f"Get vehicle TCO failed: Vehicle {vehicle_id} not found")
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    return calculate_vehicle_tco(vehicle, db)
+
+
+@router.get("/tolls/summary", response_model=FleetTollSummaryResponse)
+def get_fleet_toll_summary(
+    year: int = Query(default=None),
+    month: int = Query(default=None),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    from calendar import monthrange
+    from datetime import datetime
+
+    if start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date + " 23:59:59", "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid date format. Use YYYY-MM-DD"
+            )
+    else:
+        now = get_now_ist_naive()
+        y = year or now.year
+        m = month or now.month
+        _, last_day = monthrange(y, m)
+        start_dt = datetime(y, m, 1, 0, 0, 0)
+        end_dt = datetime(y, m, last_day, 23, 59, 59)
+
+    vehicles = db.query(Vehicle).all()
+    all_tolls = (
+        db.query(VehicleTollLog)
+        .filter(
+            VehicleTollLog.toll_date >= start_dt, VehicleTollLog.toll_date <= end_dt
+        )
+        .order_by(VehicleTollLog.toll_date.desc())
+        .all()
+    )
+
+    tolls_by_vehicle = {v.id: [] for v in vehicles}
+    for t in all_tolls:
+        if t.vehicle_id in tolls_by_vehicle:
+            tolls_by_vehicle[t.vehicle_id].append(t)
+
+    vehicle_summaries = []
+    total_fleet_spend = 0.0
+    total_fastag_spend = 0.0
+    total_cash_spend = 0.0
+
+    for v in vehicles:
+        v_tolls = tolls_by_vehicle.get(v.id, [])
+        v_total = sum(t.amount for t in v_tolls)
+        v_fastag = sum(
+            t.amount for t in v_tolls if t.payment_method.lower() == "fastag"
+        )
+        v_cash = sum(t.amount for t in v_tolls if t.payment_method.lower() != "fastag")
+
+        total_fleet_spend += v_total
+        total_fastag_spend += v_fastag
+        total_cash_spend += v_cash
+
+        vehicle_summaries.append(
+            VehicleTollSummaryItem(
+                vehicle_id=v.id,
+                make=v.make,
+                model=v.model,
+                license_plate=v.license_plate,
+                total_toll_spend=round(v_total, 2),
+                fastag_spend=round(v_fastag, 2),
+                cash_spend=round(v_cash, 2),
+                transaction_count=len(v_tolls),
+                toll_logs=[VehicleTollResponse.model_validate(t) for t in v_tolls],
+            )
+        )
+
+    return FleetTollSummaryResponse(
+        period_start=start_dt.strftime("%Y-%m-%d"),
+        period_end=end_dt.strftime("%Y-%m-%d"),
+        total_fleet_toll_spend=round(total_fleet_spend, 2),
+        total_fastag_spend=round(total_fastag_spend, 2),
+        total_cash_spend=round(total_cash_spend, 2),
+        total_transactions=len(all_tolls),
+        vehicle_summaries=vehicle_summaries,
+    )
+
+
 @router.get("/{vehicle_id}", response_model=VehicleResponse)
 def get_vehicle(
     vehicle_id: int,
@@ -267,6 +630,14 @@ def delete_vehicle(
     db.delete(vehicle)
     db.commit()
     return {"message": "Vehicle deleted successfully"}
+
+
+@router.get("/maintenance/all", response_model=List[MaintenanceLogResponse])
+def get_all_maintenance_logs(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    return db.query(MaintenanceLog).order_by(MaintenanceLog.service_date.desc()).all()
 
 
 @router.get("/{vehicle_id}/maintenance", response_model=List[MaintenanceLogResponse])
@@ -369,3 +740,88 @@ def complete_maintenance_log(
     db.commit()
     db.refresh(log)
     return log
+
+
+@router.post("/{vehicle_id}/tolls", response_model=VehicleTollResponse)
+def create_vehicle_toll_log(
+    vehicle_id: int,
+    toll_in: VehicleTollCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    toll_date_val = toll_in.toll_date or get_now_ist_naive()
+    payment_method_val = toll_in.payment_method or "FASTag"
+
+    if payment_method_val.lower() == "fastag":
+        if vehicle.fasttag_balance < toll_in.amount:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Insufficient FASTag balance on vehicle ({vehicle.license_plate}). Current balance: ₹{vehicle.fasttag_balance:.2f}, required: ₹{toll_in.amount:.2f}",
+            )
+        vehicle.fasttag_balance -= toll_in.amount
+
+    toll_log = VehicleTollLog(
+        vehicle_id=vehicle_id,
+        driver_id=toll_in.driver_id,
+        trip_id=toll_in.trip_id,
+        toll_plaza_name=toll_in.toll_plaza_name,
+        highway_name=toll_in.highway_name,
+        amount=toll_in.amount,
+        payment_method=payment_method_val,
+        transaction_reference=toll_in.transaction_reference,
+        toll_date=toll_date_val,
+    )
+    db.add(toll_log)
+    db.commit()
+    db.refresh(toll_log)
+    return toll_log
+
+
+@router.get("/{vehicle_id}/tolls", response_model=List[VehicleTollResponse])
+def get_vehicle_tolls(
+    vehicle_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    return (
+        db.query(VehicleTollLog)
+        .filter(VehicleTollLog.vehicle_id == vehicle_id)
+        .order_by(VehicleTollLog.toll_date.desc())
+        .all()
+    )
+
+
+@router.post("/{vehicle_id}/fasttag-recharge")
+def recharge_vehicle_fasttag(
+    vehicle_id: int,
+    recharge_data: dict,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    amount = float(recharge_data.get("amount", 0.0))
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Recharge amount must be positive",
+        )
+
+    vehicle.fasttag_balance += amount
+    db.commit()
+    db.refresh(vehicle)
+    return {
+        "message": f"Successfully recharged ₹{amount:.2f} for vehicle {vehicle.license_plate}",
+        "new_balance": vehicle.fasttag_balance,
+        "vehicle_id": vehicle.id,
+    }

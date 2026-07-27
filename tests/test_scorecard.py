@@ -222,8 +222,8 @@ def test_scorecard_sorted_by_overall_score(client, db_session):
     ), "Scorecards must be sorted by overall_score desc"
 
 
-def test_scorecard_requires_dispatcher_role(client, db_session):
-    """Driver-role users must not be able to access the scorecard endpoint."""
+def test_scorecard_allows_driver_role_limited(client, db_session):
+    """Driver role users get only their own scorecard data."""
     now = get_now_ist_naive()
     # Register as driver (dispatcher account for creating the driver)
     disp_token = register_and_login(client, "sc_disp_perm")
@@ -241,7 +241,8 @@ def test_scorecard_requires_dispatcher_role(client, db_session):
     res = client.get(
         f"/drivers/scorecard?year={now.year}&month={now.month}", headers=driver_headers
     )
-    assert res.status_code == 403
+    assert res.status_code == 200
+    assert len(res.json()) == 0
 
 
 def test_scorecard_distance_aggregation(client, db_session):
@@ -292,3 +293,34 @@ def test_scorecard_excludes_trips_outside_period(client, db_session):
     assert (
         sc is None
     ), "Driver trips from a different month should NOT appear in the scorecard"
+
+
+def test_scorecard_auto_payroll_bonus_injection(client, db_session):
+    """Generating driver payment auto-injects scorecard safety bonus/deductions."""
+    now = get_now_ist_naive()
+    token = register_and_login(client, "sc_disp_paybonus")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    driver_id = create_driver(
+        client, headers, "SC PayBonus Driver", "9880009999", "paybonus08"
+    )
+
+    # Create 5 completed trips — 5 × ₹2000 = ₹10000 earnings
+    for i in range(5):
+        create_trip(client, headers, driver_id, now, offset_days=i)
+
+    # Generate monthly payment draft
+    res = client.post(
+        f"/drivers/{driver_id}/payments/generate?year={now.year}&month={now.month}",
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    payment = res.json()
+
+    assert payment["driver_id"] == driver_id
+    assert payment["year"] == now.year
+    assert payment["month"] == now.month
+    # Bonus should be automatically calculated from high performance scorecard
+    assert payment["bonus"] > 0.0
+    assert payment["total_paid"] > payment["commission_paid"]
+    assert "safety performance bonus" in payment["note"]

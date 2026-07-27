@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import List
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -6,6 +7,8 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from app.core.jwt import decode_access_token
 from app.db import get_db
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ws", tags=["WebSockets"])
 
@@ -61,6 +64,7 @@ async def websocket_endpoint(
             payload = decode_access_token(token)
             username: str = payload.get("sub")
             if username is None:
+                logger.warning("WS auth failed: token payload missing sub field")
                 await websocket.close(code=4003)  # Forbidden
                 return
 
@@ -70,22 +74,31 @@ async def websocket_endpoint(
                 or not user.is_active
                 or user.role not in {"admin", "dispatcher"}
             ):
+                role = user.role if user else None
+                active = user.is_active if user else None
+                logger.warning(
+                    f"WS auth failed: user '{username}' - found={user is not None}, active={active}, role={role}"
+                )
                 await websocket.close(code=4003)  # Forbidden
                 return
 
-        except Exception:
+        except Exception as e:
+            logger.warning(f"WS auth failed: exception decoding token: {e}")
             await websocket.close(code=4003)
             return
 
         # Accept connection
         await manager.connect(websocket)
+        logger.info(f"WS client connected: '{username}'")
         try:
             while True:
                 # Keep connection open and discard client messages
                 await websocket.receive_text()
         except WebSocketDisconnect:
+            logger.info(f"WS client disconnected: '{username}' (clean disconnect)")
             manager.disconnect(websocket)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"WS client disconnected: '{username}' with exception: {e}")
             manager.disconnect(websocket)
     finally:
         try:

@@ -14,17 +14,19 @@ class DriverStatus(str, Enum):
 class DriverCreate(BaseModel):
     name: str
     phone: str
-    license_number: str
-    license_expiry: datetime
-    user_id: Optional[int] = None
+    license_number: Optional[str] = None
+    license_expiry: Optional[datetime] = None
+    status: Optional[DriverStatus] = DriverStatus.available
+    note: Optional[str] = None
     username: Optional[str] = None
     password: Optional[str] = None
     email: Optional[str] = None
     base_salary: Optional[float] = 0.0
-    commission_percentage: Optional[float] = 100.0
+    commission_percentage: Optional[float] = 0.0
     vehicle_type: Optional[str] = "cargo_truck"
     odometer_km: Optional[float] = 0.0
     vehicle_id: Optional[int] = None
+    user_id: Optional[int] = None
 
 
 class DriverStatusUpdate(BaseModel):
@@ -43,6 +45,9 @@ class DriverUpdate(BaseModel):
     vehicle_type: Optional[str] = None
     odometer_km: Optional[float] = None
     vehicle_id: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    email: Optional[str] = None
 
 
 class DriverLocationUpdate(BaseModel):
@@ -63,7 +68,7 @@ class DriverResponse(BaseModel):
     current_longitude: Optional[float] = None
     last_location_update: Optional[datetime] = None
     base_salary: float = 0.0
-    commission_percentage: float = 100.0
+    commission_percentage: float = 0.0
     vehicle_type: Optional[str] = "cargo_truck"
     odometer_km: Optional[float] = 0.0
     vehicle_id: Optional[int] = None
@@ -199,6 +204,10 @@ class DriverScorecardResponse(BaseModel):
     flagged_trips: int
     # Fatigue Compliance KPI
     fatigue_incidents: int  # days where driver exceeded 8h driving
+    # Safety & Telematics KPIs
+    speeding_incidents: int = 0
+    inspection_pass_rate: float = 100.0  # 0-100
+    safety_score: float = 100.0  # 0-100
     # Earnings KPIs
     total_earnings: float
     average_fare: float
@@ -222,6 +231,8 @@ class DriverPaymentResponse(BaseModel):
     commission_paid: float
     bonus: float
     deductions: float
+    advance_payment: float = 0.0
+    personal_fuel_expense: float = 0.0
     total_paid: float
     status: str
     paid_at: Optional[datetime] = None
@@ -240,6 +251,8 @@ class DriverPaymentCreate(BaseModel):
     commission_paid: Optional[float] = None
     bonus: Optional[float] = 0.0
     deductions: Optional[float] = 0.0
+    advance_payment: Optional[float] = 0.0
+    personal_fuel_expense: Optional[float] = 0.0
     status: Optional[str] = "pending"
     payment_method: Optional[str] = None
     note: Optional[str] = None
@@ -250,6 +263,8 @@ class DriverPaymentUpdate(BaseModel):
     commission_paid: Optional[float] = None
     bonus: Optional[float] = None
     deductions: Optional[float] = None
+    advance_payment: Optional[float] = None
+    personal_fuel_expense: Optional[float] = None
     status: Optional[str] = None
     payment_method: Optional[str] = None
     note: Optional[str] = None

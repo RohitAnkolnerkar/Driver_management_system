@@ -61,6 +61,7 @@ app.db
 
 *.log
 *.pid
+logs/
 
 # OS files
 

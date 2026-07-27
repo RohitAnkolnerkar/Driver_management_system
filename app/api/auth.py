@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -6,6 +8,8 @@ from app.core.jwt import create_access_token
 from app.core.security import verify_password
 from app.db import get_db
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -16,6 +20,9 @@ def login_for_access_token(
 ):
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user:
+        logger.warning(
+            f"Failed login attempt: username '{form_data.username}' not found"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -23,6 +30,9 @@ def login_for_access_token(
         )
 
     if not verify_password(form_data.password, user.hashed_password):
+        logger.warning(
+            f"Failed login attempt: incorrect password for username '{form_data.username}'"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",

@@ -27,8 +27,14 @@ import {
   Building,
   Printer,
   Download,
-  Fuel
+  Fuel,
+  CreditCard
 } from 'lucide-react';
+
+import { ESGDashboardCard } from './components/ESGDashboardCard';
+import { FinanceDashboard } from './components/FinanceDashboard';
+import { ExpenseReimbursementCard } from './components/ExpenseReimbursementCard';
+import { FASTagDashboard } from './components/FASTagDashboard';
 
 // API Fetch helper that includes Auth token
 const apiFetch = async (url: string, options: RequestInit = {}) => {
@@ -62,7 +68,7 @@ export default function App() {
   const [signUpPhone, setSignUpPhone] = useState('');
 
   // Tab State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'trips' | 'drivers' | 'alerts' | 'profile' | 'map' | 'performance' | 'payments' | 'vehicles' | 'fuel' | 'reconciliation'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'trips' | 'drivers' | 'alerts' | 'profile' | 'map' | 'performance' | 'payments' | 'vehicles' | 'fuel' | 'reconciliation' | 'finance' | 'expenses' | 'fasttag'>('dashboard');
 
   // Payments State
   const [payments, setPayments] = useState<any[]>([]);
@@ -92,6 +98,8 @@ export default function App() {
   // Loading & Action states
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [addDriverError, setAddDriverError] = useState<string | null>(null);
+  const [editDriverError, setEditDriverError] = useState<string | null>(null);
 
   // Modals & Forms State
   const [editingFuelLog, setEditingFuelLog] = useState<any | null>(null);
@@ -1345,13 +1353,21 @@ export default function App() {
   const handleDriverStatusSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingDriverStatus) return;
+    setEditDriverError(null);
     try {
+      if (editDriverLicense) {
+        const licensePattern = /^[A-Z]{2}[ -]?[0-9]{2}[ -]?[0-9]{4}[ -]?[0-9]{7}$/i;
+        if (!licensePattern.test(editDriverLicense.trim())) {
+          throw new Error("Invalid Indian driving license format. Must be in format SS-RR-YYYY-NNNNNNN (e.g., MH-12-2018-0004567 or MH1220180004567).");
+        }
+      }
+
       await apiFetch(`/drivers/${editingDriverStatus}`, {
         method: 'PATCH',
         body: JSON.stringify({
           name: editDriverName,
           phone: editDriverPhone,
-          license_number: editDriverLicense,
+          license_number: editDriverLicense || null,
           license_expiry: editDriverExpiry ? new Date(editDriverExpiry).toISOString() : null,
           status: driverNewStatus,
           note: driverStatusNote || undefined,
@@ -1372,6 +1388,7 @@ export default function App() {
       setEditDriverVehicleId('');
       loadData();
     } catch (e: any) {
+      setEditDriverError(e.message);
       showError(e.message);
     }
   };
@@ -1430,11 +1447,19 @@ export default function App() {
   // Business Action: Create Driver Profile
   const handleCreateDriver = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAddDriverError(null);
     try {
+      if (newDriverData.license_number) {
+        const licensePattern = /^[A-Z]{2}[ -]?[0-9]{2}[ -]?[0-9]{4}[ -]?[0-9]{7}$/i;
+        if (!licensePattern.test(newDriverData.license_number.trim())) {
+          throw new Error("Invalid Indian driving license format. Must be in format SS-RR-YYYY-NNNNNNN (e.g., MH-12-2018-0004567 or MH1220180004567).");
+        }
+      }
+
       const payload: any = {
         name: newDriverData.name,
         phone: newDriverData.phone,
-        license_number: newDriverData.license_number,
+        license_number: newDriverData.license_number || undefined,
         license_expiry: newDriverData.license_expiry ? new Date(newDriverData.license_expiry).toISOString() : undefined,
         base_salary: parseFloat(newDriverData.base_salary || '0'),
         commission_percentage: parseFloat(newDriverData.commission_percentage || '100'),
@@ -1482,6 +1507,7 @@ export default function App() {
       });
       loadData();
     } catch (e: any) {
+      setAddDriverError(e.message);
       showError(e.message);
     }
   };
@@ -1952,6 +1978,33 @@ export default function App() {
                     Financial Audits
                   </div>
                 </li>
+                <li>
+                  <div
+                    className={`nav-item ${activeTab === 'finance' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('finance')}
+                  >
+                    <TrendingUp size={18} />
+                    Finance Dashboard
+                  </div>
+                </li>
+                <li>
+                  <div
+                    className={`nav-item ${activeTab === 'expenses' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('expenses')}
+                  >
+                    <Clipboard size={18} />
+                    Expenses Reimbursement
+                  </div>
+                </li>
+                <li>
+                  <div
+                    className={`nav-item ${activeTab === 'fasttag' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('fasttag')}
+                  >
+                    <CreditCard size={18} />
+                    FASTag Hub
+                  </div>
+                </li>
 
               </>
             )}
@@ -2078,152 +2131,287 @@ export default function App() {
             {/* TAB 1: DASHBOARD (ADMIN & DISPATCHER ONLY) */}
             {activeTab === 'dashboard' && isDispatcher && (() => {
               const expiredLicensesCount = drivers.filter(driver => driver.license_expiry && new Date(driver.license_expiry) < new Date()).length;
+              const unassignedTrips = trips.filter(t => t.status === 'created');
+              const activeTripsList = trips.filter(t => t.status === 'assigned' || t.status === 'started');
+              const totalDrivers = dashboardStats?.total_drivers || drivers.length || 0;
+              const availableDrivers = dashboardStats?.available_drivers || drivers.filter(d => d.status === 'available').length || 0;
+              const onTripDrivers = dashboardStats?.on_trip_drivers || drivers.filter(d => d.status === 'on_trip').length || 0;
+              const activeDispatches = dashboardStats?.active_trips || activeTripsList.length || 0;
+              const tripsToday = dashboardStats?.total_trips_today || 0;
+
               return (
                 <div>
                   {/* Expired License Warning Alert Banner */}
                   {expiredLicensesCount > 0 && (
                     <div className="alert alert-warning" style={{
-                      backgroundColor: 'rgba(239, 68, 68, 0.08)',
-                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      backgroundColor: 'rgba(239, 68, 68, 0.06)',
+                      border: '1px solid rgba(239, 68, 68, 0.15)',
                       color: 'var(--accent-red)',
-                      padding: '12px 20px',
-                      borderRadius: '8px',
-                      marginBottom: '20px',
+                      padding: '14px 20px',
+                      borderRadius: '12px',
+                      marginBottom: '24px',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '10px'
+                      gap: '12px',
+                      boxShadow: '0 4px 12px rgba(239, 68, 68, 0.05)'
                     }}>
-                      <AlertTriangle size={16} />
-                      <span style={{ fontSize: '13px', fontWeight: 500 }}>
-                        Fleet Alert: {expiredLicensesCount} driver{expiredLicensesCount > 1 ? 's have' : ' has'} an expired license! Please update their profile to enable dispatches.
+                      <AlertTriangle size={18} color="var(--accent-red)" />
+                      <span style={{ fontSize: '13.5px', fontWeight: 500 }}>
+                        Fleet Safety Notice: <strong>{expiredLicensesCount} driver{expiredLicensesCount > 1 ? 's have' : ' has'}</strong> an expired commercial license! Please update profiles to permit dispatch.
                       </span>
-                      <button onClick={() => setActiveTab('drivers')} className="btn btn-secondary" style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: '11px', color: 'var(--accent-red)', borderColor: 'rgba(239, 68, 68, 0.2)', backgroundColor: 'transparent' }}>
+                      <button onClick={() => setActiveTab('drivers')} className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto', color: 'var(--accent-red)', borderColor: 'rgba(239, 68, 68, 0.2)', backgroundColor: 'rgba(239, 68, 68, 0.03)' }}>
                         Manage Drivers
                       </button>
                     </div>
                   )}
 
-                  {/* Metric Card Widgets */}
-                  <div className="metrics-grid">
-                    <div className="metric-card">
-                      <div className="metric-label">Active Drivers</div>
-                      <div className="metric-value">{dashboardStats?.total_drivers || 0}</div>
-                    </div>
-                    <div className="metric-card">
-                      <div className="metric-label">Available Idle</div>
-                      <div className="metric-value" style={{ color: 'var(--accent-green)' }}>{dashboardStats?.available_drivers || 0}</div>
-                    </div>
-                    <div className="metric-card">
-                      <div className="metric-label">Drivers On Trip</div>
-                      <div className="metric-value" style={{ color: 'var(--accent-blue)' }}>{dashboardStats?.on_trip_drivers || 0}</div>
-                    </div>
-                    <div className="metric-card">
-                      <div className="metric-label">Active Dispatches</div>
-                      <div className="metric-value" style={{ color: 'var(--accent-cyan)' }}>{dashboardStats?.active_trips || 0}</div>
+                  {/* Operational Dashboard Header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
+                    <div>
+                      <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#fff', letterSpacing: '-0.03em', marginBottom: '4px' }}>
+                        Dashboard Operations Hub
+                      </h1>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                        <span>Role: {currentUser?.role}</span>
+                        <span style={{ width: '3px', height: '3px', borderRadius: '50%', backgroundColor: 'var(--text-muted)' }}></span>
+                        <span>{new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+                        <span style={{ width: '3px', height: '3px', borderRadius: '50%', backgroundColor: 'var(--text-muted)' }}></span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent-green)', boxShadow: '0 0 8px var(--accent-green)' }} />
+                          <span>Live System Feed</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="layout-split">
-                    {/* Dispatch Queue Section */}
-                    <div className="content-panel">
-                      <div className="panel-header">
-                        <h2 className="panel-title">
-                          <Clock size={20} color="var(--accent-cyan)" />
-                          Smart Dispatch Queue
-                        </h2>
-                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Created / Unassigned Trips</span>
+                  {/* Modern KPI Cards Grid */}
+                  <div className="metrics-grid">
+                    <div className="metric-card" style={{ borderLeft: '3px solid var(--accent-blue)' }}>
+                      <div className="metric-label">Driver Allocation</div>
+                      <div className="metric-value">
+                        {availableDrivers} <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>/ {totalDrivers} idle</span>
                       </div>
-
-                      <div className="table-container">
-                        <table className="dashboard-table">
-                          <thead>
-                            <tr>
-                              <th>Trip</th>
-                              <th>Details</th>
-                              <th>Priority</th>
-                              <th>Dispatcher Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {trips.filter(t => t.status === 'created').length === 0 ? (
-                              <tr>
-                                <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
-                                  All dispatches assigned! No unassigned trips remaining.
-                                </td>
-                              </tr>
-                            ) : (
-                              trips.filter(t => t.status === 'created').map(trip => (
-                                <tr key={trip.id}>
-                                  <td>
-                                    <div style={{ fontWeight: 600, color: '#fff' }}>{trip.source} → {trip.destination}</div>
-                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>ID: {trip.id} | fare: ₹{trip.estimated_fare || 'N/A'}</div>
-                                  </td>
-                                  <td>
-                                    <div style={{ fontSize: '12px' }}>{trip.distance_km || 'N/A'} km | {trip.duration_hours !== undefined && trip.duration_hours !== null ? `${trip.duration_hours} hrs` : (trip.duration_minutes ? `${(trip.duration_minutes / 60).toFixed(1)} hrs` : 'N/A')}</div>
-                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{trip.source_company || 'Standard client'}</div>
-                                  </td>
-                                  <td>
-                                    <span className={`badge`} style={{
-                                      backgroundColor: trip.priority === 'urgent' ? 'rgba(239,68,68,0.12)' : trip.priority === 'high' ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.05)',
-                                      color: trip.priority === 'urgent' ? 'var(--accent-red)' : trip.priority === 'high' ? 'var(--accent-amber)' : 'var(--text-secondary)'
-                                    }}>
-                                      {trip.priority}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                      <button onClick={() => handleAutoAssign(trip.id)} className="btn btn-primary btn-sm">
-                                        <ListRestart size={14} />
-                                        Auto-Assign
-                                      </button>
-                                      <button onClick={() => setAssigningTripId(trip.id)} className="btn btn-secondary btn-sm">
-                                        Manual Selection
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
+                      <div style={{ marginTop: '8px', width: '100%', height: '4px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${(availableDrivers / (totalDrivers || 1)) * 100}%`, height: '100%', backgroundColor: 'var(--accent-blue)', borderRadius: '2px' }}></div>
                       </div>
                     </div>
 
-                    {/* Expiry Warning Sidebar Metric Card */}
-                    <div className="content-panel" style={{ background: 'linear-gradient(to bottom, #1f2833, #151c24)' }}>
-                      <div className="panel-header" style={{ marginBottom: '16px' }}>
-                        <h2 className="panel-title" style={{ color: 'var(--accent-amber)' }}>
-                          <AlertTriangle size={20} />
-                          License Expiry Alerts
-                        </h2>
+                    <div className="metric-card" style={{ borderLeft: '3px solid var(--accent-cyan)' }}>
+                      <div className="metric-label">Active Dispatches</div>
+                      <div className="metric-value" style={{ color: 'var(--accent-cyan)' }}>{activeDispatches}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '8px' }}>
+                        {onTripDrivers} driver(s) currently on route
                       </div>
+                    </div>
 
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '24px' }}>
-                        We have found <strong style={{ color: '#fff' }}>{alerts.length}</strong> driver(s) whose commercial licenses are expired or expiring within 30 days.
-                      </p>
+                    <div className="metric-card" style={{ borderLeft: '3px solid var(--accent-green)' }}>
+                      <div className="metric-label">Trips Completed Today</div>
+                      <div className="metric-value" style={{ color: 'var(--accent-green)' }}>{tripsToday}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '8px' }}>
+                        From seeded database runs
+                      </div>
+                    </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {alerts.slice(0, 3).map(driver => {
-                          const expired = new Date(driver.license_expiry) < new Date();
-                          return (
-                            <div key={driver.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.15)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                              <div>
-                                <div style={{ fontWeight: 600, color: '#fff' }}>{driver.name}</div>
-                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Exp: {new Date(driver.license_expiry).toLocaleDateString()}</div>
+                    <div className="metric-card" style={{ borderLeft: '3px solid var(--accent-amber)' }}>
+                      <div className="metric-label">Smart Dispatch Queue</div>
+                      <div className="metric-value" style={{ color: 'var(--accent-amber)' }}>{unassignedTrips.length}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '8px' }}>
+                        {unassignedTrips.length > 0 ? `${unassignedTrips.length} unassigned cargo loads` : 'All dispatches assigned'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Split Workspace Layout */}
+                  <div className="layout-split">
+                    {/* Left Column: Smart Dispatch Queue & Active Dispatches */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      
+                      {/* Dispatch Queue Panel */}
+                      <div className="content-panel">
+                        <div className="panel-header">
+                          <h2 className="panel-title">
+                            <Clock size={18} color="var(--accent-cyan)" />
+                            Smart Dispatch Queue
+                          </h2>
+                          <span className="badge badge-assigned" style={{ fontSize: '10px' }}>
+                            {unassignedTrips.length} Pending
+                          </span>
+                        </div>
+
+                        {unassignedTrips.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '36px 20px', color: 'var(--text-secondary)' }}>
+                            <div style={{ fontSize: '28px', marginBottom: '12px' }}>🚚</div>
+                            <h3 style={{ fontSize: '14px', color: '#fff', marginBottom: '4px' }}>Queue is Clear</h3>
+                            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>All freight dispatches have been successfully assigned to drivers.</p>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            {unassignedTrips.map(trip => (
+                              <div key={trip.id} style={{ 
+                                padding: '16px', 
+                                borderRadius: '10px', 
+                                backgroundColor: 'rgba(255,255,255,0.01)', 
+                                border: '1px solid rgba(255,255,255,0.03)',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                transition: 'all 0.2s ease'
+                              }}
+                              className="queue-card-hover"
+                              >
+                                <div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                    <div style={{ fontWeight: 600, fontSize: '14px', color: '#fff' }}>
+                                      {trip.source} → {trip.destination}
+                                    </div>
+                                    <span className="badge" style={{
+                                      fontSize: '9px',
+                                      padding: '1px 6px',
+                                      backgroundColor: trip.priority === 'urgent' ? 'rgba(239,68,68,0.12)' : trip.priority === 'high' ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.04)',
+                                      color: trip.priority === 'urgent' ? 'var(--accent-red)' : trip.priority === 'high' ? 'var(--accent-amber)' : 'var(--text-secondary)',
+                                      borderColor: trip.priority === 'urgent' ? 'rgba(239,68,68,0.2)' : trip.priority === 'high' ? 'rgba(245,158,11,0.2)' : 'transparent'
+                                    }}>
+                                      {trip.priority}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                    <span>Distance: <strong>{trip.distance_km || 'N/A'} km</strong></span>
+                                    <span>Est. Fare: <strong style={{ color: 'var(--accent-green)' }}>₹{trip.estimated_fare?.toLocaleString('en-IN') || 'N/A'}</strong></span>
+                                    <span>Client: <strong>{trip.source_company || 'Standard'}</strong></span>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                  <button onClick={() => handleAutoAssign(trip.id)} className="btn btn-primary btn-sm" style={{ padding: '6px 12px', gap: '4px' }}>
+                                    <ListRestart size={12} />
+                                    Auto
+                                  </button>
+                                  <button onClick={() => setAssigningTripId(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '6px 12px' }}>
+                                    Manual
+                                  </button>
+                                </div>
                               </div>
-                              <span className={`expiry-indicator ${expired ? 'expiry-red' : 'expiry-amber'}`}>
-                                {expired ? 'Expired' : 'Expiring'}
-                              </span>
-                            </div>
-                          );
-                        })}
+                            ))}
+                          </div>
+                        )}
                       </div>
 
-                      {alerts.length > 0 && (
-                        <button onClick={() => setActiveTab('alerts')} className="btn btn-secondary btn-sm" style={{ width: '100%', marginTop: '20px', justifyContent: 'center' }}>
-                          View All Alerts
-                        </button>
-                      )}
+                      {/* Active Dispatches Feed */}
+                      <div className="content-panel">
+                        <div className="panel-header">
+                          <h2 className="panel-title">
+                            <Truck size={18} color="var(--accent-green)" />
+                            Live Fleet Dispatches Tracker
+                          </h2>
+                          <span className="badge badge-available" style={{ fontSize: '10px' }}>
+                            {activeTripsList.length} Active
+                          </span>
+                        </div>
+
+                        {activeTripsList.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '30px 20px', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                            No active trips currently in transit.
+                          </div>
+                        ) : (
+                          <div className="table-container">
+                            <table className="dashboard-table">
+                              <thead>
+                                <tr>
+                                  <th>Route & ID</th>
+                                  <th>Driver & Vehicle</th>
+                                  <th>Status</th>
+                                  <th>Cargo weight</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {activeTripsList.map(trip => {
+                                  const driverObj = drivers.find(d => d.id === trip.driver_id);
+                                  const vehicleObj = vehicles.find(v => v.id === trip.vehicle_id);
+                                  return (
+                                    <tr key={trip.id}>
+                                      <td>
+                                        <div style={{ fontWeight: 600, color: '#fff' }}>{trip.source} → {trip.destination}</div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>ID: {trip.id} | Est: {trip.distance_km} km</div>
+                                      </td>
+                                      <td>
+                                        <div style={{ fontWeight: 500 }}>{driverObj?.name || 'Unassigned'}</div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{vehicleObj?.make} {vehicleObj?.model} ({vehicleObj?.license_plate || 'No Plate'})</div>
+                                      </td>
+                                      <td>
+                                        <span className={`badge badge-${trip.status}`}>
+                                          {trip.status}
+                                        </span>
+                                      </td>
+                                      <td>
+                                        <div style={{ fontSize: '12px' }}>{trip.cargo_weight_kg ? `${trip.cargo_weight_kg.toLocaleString()} kg` : 'N/A'}</div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{trip.cargo_volume_m3 ? `${trip.cargo_volume_m3} m³` : ''}</div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right Column: Alerts & Sustainability */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                      
+                      {/* Expiry Alerts Card */}
+                      <div className="content-panel" style={{ borderLeft: '3px solid var(--accent-red)' }}>
+                        <div className="panel-header" style={{ marginBottom: '12px' }}>
+                          <h2 className="panel-title" style={{ color: 'var(--accent-red)' }}>
+                            <AlertTriangle size={18} />
+                            Safety Alerts ({alerts.length})
+                          </h2>
+                        </div>
+
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '12.5px', marginBottom: '16px' }}>
+                          Commercial driver license expiration audits:
+                        </p>
+
+                        {alerts.length === 0 ? (
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic', padding: '10px 0' }}>
+                            ✓ All driver licenses are fully compliant.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {alerts.slice(0, 4).map(driver => {
+                              const expired = new Date(driver.license_expiry) < new Date();
+                              return (
+                                <div key={driver.id} style={{ 
+                                  display: 'flex', 
+                                  justifyContent: 'space-between', 
+                                  alignItems: 'center', 
+                                  backgroundColor: 'rgba(255,255,255,0.01)', 
+                                  padding: '10px 12px', 
+                                  borderRadius: '8px', 
+                                  border: '1px solid rgba(255,255,255,0.02)' 
+                                }}>
+                                  <div>
+                                    <div style={{ fontWeight: 600, color: '#fff', fontSize: '12.5px' }}>{driver.name}</div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Exp: {new Date(driver.license_expiry).toLocaleDateString()}</div>
+                                  </div>
+                                  <span className={`expiry-indicator ${expired ? 'expiry-red' : 'expiry-amber'}`} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px' }}>
+                                    {expired ? 'Expired' : 'Expiring'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {alerts.length > 0 && (
+                          <button onClick={() => setActiveTab('alerts')} className="btn btn-secondary btn-sm" style={{ width: '100%', marginTop: '16px', justifyContent: 'center', fontSize: '11.5px' }}>
+                            View All Warnings
+                          </button>
+                        )}
+                      </div>
+
+                      {/* ESG Dashboard Section */}
+                      <ESGDashboardCard apiFetch={apiFetch} />
+
                     </div>
                   </div>
                 </div>
@@ -2352,6 +2540,7 @@ export default function App() {
                             <td>
                               <div style={{ display: 'flex', gap: '8px' }}>
                                 <button onClick={() => {
+                                  setEditDriverError(null);
                                   setEditingDriverStatus(driver.id);
                                   setDriverNewStatus(driver.status);
                                   setEditDriverName(driver.name);
@@ -4818,6 +5007,19 @@ export default function App() {
                 )}
               </div>
             )}
+            {activeTab === 'finance' && token && (
+              <FinanceDashboard token={token} />
+            )}
+
+            {activeTab === 'expenses' && token && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <ExpenseReimbursementCard apiFetch={apiFetch} drivers={drivers} />
+              </div>
+            )}
+
+            {activeTab === 'fasttag' && token && (
+              <FASTagDashboard apiFetch={apiFetch} />
+            )}
 
             {/* TAB: LIVE MAP */}
             {activeTab === 'map' && (() => {
@@ -5606,10 +5808,17 @@ export default function App() {
             <form className="modal-content" onSubmit={handleDriverStatusSubmit} style={{ width: '480px' }}>
               <div className="modal-header">
                 <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Edit Driver Profile & Status</h3>
-                <button type="button" className="modal-close" onClick={() => setEditingDriverStatus(null)}>
+                <button type="button" className="modal-close" onClick={() => { setEditDriverError(null); setEditingDriverStatus(null); }}>
                   <X size={20} />
                 </button>
               </div>
+
+              {editDriverError && (
+                <div style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: 'var(--accent-red)', border: '1px solid rgba(239,68,68,0.2)', padding: '10px 16px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                  <span>{editDriverError}</span>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Full Name</label>
@@ -5635,23 +5844,23 @@ export default function App() {
 
               <div className="form-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
-                  <label className="form-label">License Number</label>
+                  <label className="form-label">License Number (Optional)</label>
                   <input
                     type="text"
                     className="form-input"
                     value={editDriverLicense}
                     onChange={e => setEditDriverLicense(e.target.value)}
-                    required
+                    placeholder="e.g. MH-12-2018-0004567"
                   />
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>Format: SS-RR-YYYY-NNNNNNN</span>
                 </div>
                 <div>
-                  <label className="form-label">License Expiry</label>
+                  <label className="form-label">License Expiry (Optional)</label>
                   <input
                     type="date"
                     className="form-input"
                     value={editDriverExpiry}
                     onChange={e => setEditDriverExpiry(e.target.value)}
-                    required
                   />
                 </div>
               </div>
@@ -5733,7 +5942,7 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setEditingDriverStatus(null)}>
+                <button type="button" className="btn btn-secondary" onClick={() => { setEditDriverError(null); setEditingDriverStatus(null); }}>
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary">
@@ -5824,10 +6033,17 @@ export default function App() {
             <form className="modal-content" onSubmit={handleCreateDriver} style={{ width: '500px' }}>
               <div className="modal-header">
                 <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>Add New Driver Profile</h3>
-                <button type="button" className="modal-close" onClick={() => setShowAddDriver(false)}>
+                <button type="button" className="modal-close" onClick={() => { setAddDriverError(null); setShowAddDriver(false); }}>
                   <X size={20} />
                 </button>
               </div>
+
+              {addDriverError && (
+                <div style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: 'var(--accent-red)', border: '1px solid rgba(239,68,68,0.2)', padding: '10px 16px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                  <span>{addDriverError}</span>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Full Name *</label>
@@ -5855,23 +6071,22 @@ export default function App() {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div className="form-group">
-                  <label className="form-label">License Number *</label>
+                  <label className="form-label">License Number (Optional)</label>
                   <input
                     type="text"
                     className="form-input"
-                    required
                     value={newDriverData.license_number}
                     onChange={e => setNewDriverData({ ...newDriverData, license_number: e.target.value })}
-                    placeholder="e.g. DL-142023001"
+                    placeholder="e.g. MH-12-2018-0004567"
                   />
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>Format: SS-RR-YYYY-NNNNNNN</span>
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">License Expiry Date *</label>
+                  <label className="form-label">License Expiry Date (Optional)</label>
                   <input
                     type="date"
                     className="form-input"
-                    required
                     value={newDriverData.license_expiry}
                     onChange={e => setNewDriverData({ ...newDriverData, license_expiry: e.target.value })}
                   />
@@ -6013,7 +6228,7 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setShowAddDriver(false)}>
+                <button type="button" className="btn btn-secondary" onClick={() => { setAddDriverError(null); setShowAddDriver(false); }}>
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary">

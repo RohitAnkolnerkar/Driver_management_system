@@ -23,6 +23,8 @@ class TripCreate(BaseModel):
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
     vehicle_id: Optional[int] = None
+    cargo_weight_kg: Optional[float] = None
+    cargo_volume_m3: Optional[float] = None
 
 
 class AssignDriver(BaseModel):
@@ -108,6 +110,8 @@ class TripResponse(BaseModel):
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
     gps_distance_km: Optional[float] = None
+    cargo_weight_kg: Optional[float] = None
+    cargo_volume_m3: Optional[float] = None
     start_odometer: Optional[float] = None
     end_odometer: Optional[float] = None
     odo_distance_km: Optional[float] = None

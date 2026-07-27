@@ -28,6 +28,7 @@ _load_dotenv()
 class Settings:
     APP_ENV: str = os.getenv("APP_ENV", "development")
     APP_NAME: str = os.getenv("APP_NAME", "FleetFlow")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./app.db")
     SECRET_KEY: str = os.getenv("SECRET_KEY", "replace-with-a-secure-random-secret")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
@@ -37,6 +38,8 @@ class Settings:
     TWILIO_ACCOUNT_SID: str | None = os.getenv("TWILIO_ACCOUNT_SID")
     TWILIO_AUTH_TOKEN: str | None = os.getenv("TWILIO_AUTH_TOKEN")
     TWILIO_FROM_NUMBER: str | None = os.getenv("TWILIO_FROM_NUMBER")
+    RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
+    RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
     SPEED_LIMIT_THRESHOLD: float = float(os.getenv("SPEED_LIMIT_THRESHOLD", "60.0"))
     RECONCILE_GPS_RATIO_LIMIT: float = float(
         os.getenv("RECONCILE_GPS_RATIO_LIMIT", "1.20")

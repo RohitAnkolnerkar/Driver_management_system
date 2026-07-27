@@ -12,6 +12,15 @@ export default defineConfig({
       '/trips': 'http://127.0.0.1:8000',
       '/vehicles': 'http://127.0.0.1:8000',
       '/fuel': 'http://127.0.0.1:8000',
+      '/pricing': 'http://127.0.0.1:8000',
+      '/expenses': 'http://127.0.0.1:8000',
+      '/finance': 'http://127.0.0.1:8000',
+      '/esg': 'http://127.0.0.1:8000',
+      '/matchmaking': 'http://127.0.0.1:8000',
+      '/pod': 'http://127.0.0.1:8000',
+      '/invoices': 'http://127.0.0.1:8000',
+      '/fuel-theft': 'http://127.0.0.1:8000',
+      '/razorpay': 'http://127.0.0.1:8000',
       '/ws': {
         target: 'ws://127.0.0.1:8000',
         ws: true

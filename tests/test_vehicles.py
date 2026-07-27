@@ -280,3 +280,104 @@ def test_driver_assignment_and_odometer_sync(client, db_session):
         f"/drivers/{driver['id']}", headers={"Authorization": f"Bearer {token}"}
     )
     assert response.json()["odometer_km"] == 5350.0
+
+
+def test_predictive_maintenance_health_and_alerts(client, db_session):
+    create_user_with_role(db_session, role="dispatcher")
+    token = get_token(client)
+
+    # 1. Create a vehicle with high odometer and overdue status
+    response = client.post(
+        "/vehicles/",
+        json={
+            "make": "Eicher",
+            "model": "Pro 3015",
+            "year": 2015,
+            "license_plate": "MH-20-EE-1111",
+            "odometer_km": 160000.0,
+            "status": "active",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 201
+    v1 = response.json()
+
+    # Get predictive health report for vehicle
+    response = client.get(
+        f"/vehicles/{v1['id']}/predictive-health",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    report = response.json()
+    assert report["urgency_status"] == "CRITICAL"
+    assert report["is_service_overdue"] is True
+    assert report["health_score"] < 60.0
+    assert len(report["recommendations"]) >= 1
+
+    # 2. Get fleet predictive alerts
+    response = client.get(
+        "/vehicles/predictive-alerts",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    alerts = response.json()
+    assert len(alerts) >= 1
+    # Critical vehicle should be first in sorted alerts list
+    assert alerts[0]["urgency_status"] == "CRITICAL"
+
+
+def test_vehicle_tco_and_fleet_summary(client, db_session):
+    create_user_with_role(db_session, role="dispatcher")
+    token = get_token(client)
+
+    # Create vehicle
+    response = client.post(
+        "/vehicles/",
+        json={
+            "make": "BharatBenz",
+            "model": "1617R",
+            "year": 2022,
+            "license_plate": "MH-12-TCO-9999",
+            "odometer_km": 1200.0,
+            "status": "active",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 201
+    v = response.json()
+
+    # Add maintenance log
+    client.post(
+        f"/vehicles/{v['id']}/maintenance",
+        json={
+            "service_type": "oil_change",
+            "description": "Engine oil change",
+            "cost": 5000.0,
+            "odometer_at_service": 1200.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    # Fetch vehicle TCO
+    response = client.get(
+        f"/vehicles/{v['id']}/tco",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    tco = response.json()
+    assert tco["vehicle_id"] == v["id"]
+    assert tco["maintenance_cost"] == 5000.0
+    assert tco["total_operating_cost"] >= 5000.0
+    assert tco["total_km_driven"] == 1200.0
+    assert tco["cost_per_km"] > 0.0
+
+    # Fetch fleet TCO summary
+    response = client.get(
+        "/vehicles/tco-summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["total_vehicles"] >= 1
+    assert summary["fleet_total_cost"] >= 5000.0
+    assert len(summary["vehicles_tco"]) >= 1

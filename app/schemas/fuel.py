@@ -19,6 +19,7 @@ class FuelLogUpdate(BaseModel):
     odometer: Optional[float] = None
     is_flagged_fraud: Optional[bool] = None
     fraud_reason: Optional[str] = None
+    audit_status: Optional[str] = None
     is_personal_two_wheeler: Optional[bool] = None
     trip_id: Optional[int] = None
 
@@ -31,6 +32,7 @@ class FuelLogResponse(BaseModel):
     odometer: float
     is_flagged_fraud: bool
     fraud_reason: Optional[str] = None
+    audit_status: str
     is_personal_two_wheeler: bool
     trip_id: Optional[int] = None
     created_at: datetime

@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -7,6 +9,8 @@ from app.core.security import hash_password
 from app.db import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -30,6 +34,9 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
 
             existing_driver = db.query(Driver).filter(Driver.phone == phone_num).first()
             if existing_driver:
+                logger.warning(
+                    f"Driver signup failed: Driver with phone '{phone_num}' already exists"
+                )
                 raise HTTPException(
                     status_code=400, detail="Driver with this phone already exists"
                 )
@@ -57,9 +64,11 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         db.rollback()
         err_msg = str(e).lower()
         if "phone" in err_msg:
+            logger.warning(f"Signup failed: duplicate phone - {err_msg}")
             raise HTTPException(
                 status_code=400, detail="Driver with this phone already exists"
             )
+        logger.warning(f"Signup failed: username/email already registered - {err_msg}")
         raise HTTPException(
             status_code=400, detail="Username or email already registered"
         )
@@ -90,8 +99,11 @@ def update_user_me(
         db.commit()
         db.refresh(current_user)
         return current_user
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
+        logger.warning(
+            f"User me update failed: username or email already registered - {e}"
+        )
         raise HTTPException(
             status_code=400, detail="Username or email already registered"
         )

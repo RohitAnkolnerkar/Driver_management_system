@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 import urllib.request
@@ -18,6 +19,8 @@ from app.schemas.fuel import (
     FuelLogResponse,
     FuelLogUpdate,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fuel", tags=["fuel"])
 
@@ -46,6 +49,7 @@ def create_fuel_log(
     # Validate Trip ID
     trip = db.query(Trip).filter(Trip.id == log_in.trip_id).first()
     if not trip:
+        logger.warning(f"Create fuel log failed: Trip {log_in.trip_id} not found")
         raise HTTPException(
             status_code=404, detail=f"Trip with ID {log_in.trip_id} not found."
         )
@@ -56,6 +60,9 @@ def create_fuel_log(
             if trip.driver_id:
                 driver_id = trip.driver_id
             else:
+                logger.warning(
+                    f"Create fuel log failed: driver_id required for trip {trip.id} with no assigned driver"
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -77,12 +84,16 @@ def create_fuel_log(
 
         driver = db.query(Driver).filter(Driver.id == driver_id).first()
         if not driver:
+            logger.warning(f"Create fuel log failed: Driver {driver_id} not found")
             raise HTTPException(
                 status_code=404, detail=f"Driver with ID {driver_id} not found."
             )
     else:
         driver = db.query(Driver).filter(Driver.user_id == current_user.id).first()
         if not driver:
+            logger.warning(
+                f"Create fuel log failed: Non-driver user {current_user.id} tried to submit driver fuel log"
+            )
             raise HTTPException(
                 status_code=400,
                 detail="Only authenticated drivers can submit fuel logs.",
@@ -207,6 +218,11 @@ def create_fuel_log(
 
     db.commit()
     db.refresh(fuel_log)
+
+    from app.api.fuel_theft import evaluate_fuel_log_for_theft
+
+    evaluate_fuel_log_for_theft(db, fuel_log, driver)
+
     return fuel_log
 
 
@@ -281,6 +297,7 @@ def update_fuel_log(
 ):
     fuel_log = db.query(FuelLog).filter(FuelLog.id == log_id).first()
     if not fuel_log:
+        logger.warning(f"Update fuel log failed: Fuel log {log_id} not found")
         raise HTTPException(status_code=404, detail="Fuel log not found")
 
     if log_in.liters_refueled is not None:
@@ -293,6 +310,8 @@ def update_fuel_log(
         fuel_log.is_flagged_fraud = log_in.is_flagged_fraud
     if log_in.fraud_reason is not None:
         fuel_log.fraud_reason = log_in.fraud_reason
+    if log_in.audit_status is not None:
+        fuel_log.audit_status = log_in.audit_status
     if log_in.trip_id is not None:
         trip = db.query(Trip).filter(Trip.id == log_in.trip_id).first()
         if not trip:

@@ -1,8 +1,10 @@
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -37,6 +39,8 @@ from app.schemas.driver import (
     DriverUpdate,
 )
 from app.schemas.trip import TripResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/drivers", tags=["Drivers"])
 
@@ -195,6 +199,136 @@ def update_driver_location(
     return response_data
 
 
+@router.post("/{driver_id}/location", response_model=DriverLocationResponse)
+def update_any_driver_location(
+    driver_id: int,
+    location_update: DriverLocationUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    import math
+
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    driver.current_latitude = location_update.latitude
+    driver.current_longitude = location_update.longitude
+    driver.last_location_update = get_now_ist_naive()
+
+    # Log to location history
+    history_entry = DriverLocationHistory(
+        driver_id=driver.id,
+        latitude=location_update.latitude,
+        longitude=location_update.longitude,
+        recorded_at=get_now_ist_naive(),
+    )
+    db.add(history_entry)
+
+    # Check for active trip
+    active_trip = (
+        db.query(Trip)
+        .filter(Trip.driver_id == driver.id, Trip.status == "started")
+        .first()
+    )
+
+    near_destination = False
+    active_trip_id = None
+    active_trip_destination = None
+
+    if active_trip:
+        history_entry.trip_id = active_trip.id
+
+        # Geofencing arrival check
+        dest_lat = active_trip.destination_latitude
+        dest_lng = active_trip.destination_longitude
+        if dest_lat is not None and dest_lng is not None:
+            # Haversine distance
+            lat1 = math.radians(location_update.latitude)
+            lon1 = math.radians(location_update.longitude)
+            lat2 = math.radians(dest_lat)
+            lon2 = math.radians(dest_lng)
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            dist = 6371.0 * c  # distance in km
+
+            # Within 100 metres: signal the driver instead of auto-completing
+            if dist < 0.1:
+                near_destination = True
+                active_trip_id = active_trip.id
+                active_trip_destination = active_trip.destination
+
+    # Check for assigned trip (to record check-in at source geofence)
+    assigned_trip = (
+        db.query(Trip)
+        .filter(Trip.driver_id == driver.id, Trip.status == "assigned")
+        .first()
+    )
+
+    if assigned_trip:
+        src_lat = assigned_trip.source_latitude
+        src_lng = assigned_trip.source_longitude
+        if src_lat is not None and src_lng is not None:
+            lat1 = math.radians(location_update.latitude)
+            lon1 = math.radians(location_update.longitude)
+            lat2 = math.radians(src_lat)
+            lon2 = math.radians(src_lng)
+
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            )
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            dist = 6371.0 * c  # distance in km
+
+            # Within 200 metres (0.2 km), record arrived_at_source_time
+            # if not already set
+            if dist <= 0.2 and assigned_trip.arrived_at_source_time is None:
+                assigned_trip.arrived_at_source_time = get_now_ist_naive()
+                history_entry_trip = TripHistory(
+                    trip_id=assigned_trip.id,
+                    status=assigned_trip.status,
+                    note="driver arrived at source geofence (auto-checkin)",
+                )
+                db.add(history_entry_trip)
+
+    db.commit()
+    db.refresh(driver)
+
+    # Trigger WebSocket real-time update broadcast
+    from app.api.ws import broadcast_update
+
+    broadcast_update(
+        {
+            "type": "location_update",
+            "driver_id": driver.id,
+            "driver_name": driver.name,
+            "latitude": driver.current_latitude,
+            "longitude": driver.current_longitude,
+            "status": driver.status,
+            "active_trip_id": active_trip_id,
+            "near_destination": near_destination,
+        }
+    )
+
+    # Build response with arrival signal
+    response_data = DriverLocationResponse.model_validate(driver)
+    response_data.near_destination = near_destination
+    response_data.active_trip_id = active_trip_id
+    response_data.active_trip_destination = active_trip_destination
+    return response_data
+
+
 @router.post("/", response_model=DriverCreateResponse)
 def create_driver(
     driver: DriverCreate,
@@ -206,35 +340,66 @@ def create_driver(
 
     user_id = driver.user_id
 
-    # If credentials are provided, create corresponding user first
-    if driver.username and driver.password:
-        existing_user = db.query(User).filter(User.username == driver.username).first()
-        if existing_user:
+    # If user_id is explicitly provided, validate it
+    if user_id:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        if user.role != "driver":
             raise HTTPException(
-                status_code=400, detail="Username is already registered"
+                status_code=400,
+                detail="The linked user does not have the 'driver' role",
             )
+    else:
+        # Determine username and email (use phone if not provided)
+        username = driver.username or driver.phone
+        email = driver.email or f"{username}@example.com"
+        password = driver.password or "driver_secret123"
 
-        email = driver.email or f"{driver.username}@example.com"
-        existing_email = db.query(User).filter(User.email == email).first()
-        if existing_email:
-            raise HTTPException(status_code=400, detail="Email is already registered")
-
-        db_user = User(
-            username=driver.username,
-            email=email,
-            hashed_password=hash_password(driver.password),
-            role="driver",
-            is_active=True,
+        # Check if user already exists
+        existing_user = (
+            db.query(User)
+            .filter((User.username == username) | (User.email == email))
+            .first()
         )
-        db.add(db_user)
-        try:
-            db.flush()
-            user_id = db_user.id
-        except IntegrityError:
-            db.rollback()
-            raise HTTPException(
-                status_code=400, detail="Username or email already registered"
+        if existing_user:
+            # Check if this user is already linked to a driver profile
+            existing_driver_for_user = (
+                db.query(Driver).filter(Driver.user_id == existing_user.id).first()
             )
+            if existing_driver_for_user:
+                raise HTTPException(
+                    status_code=400, detail="Driver with this phone already exists"
+                )
+
+            if existing_user.role == "driver":
+                # Link existing driver-role user
+                user_id = existing_user.id
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"User with username '{username}' or email '{email}' already exists with role '{existing_user.role}'.",
+                )
+        else:
+            db_user = User(
+                username=username,
+                email=email,
+                hashed_password=hash_password(password),
+                role="driver",
+                is_active=True,
+            )
+            db.add(db_user)
+            try:
+                db.flush()
+                user_id = db_user.id
+            except IntegrityError as e:
+                db.rollback()
+                logger.warning(
+                    f"Failed to register user for driver creation - username or email already registered: {e}"
+                )
+                raise HTTPException(
+                    status_code=400, detail="Username or email already registered"
+                )
 
     existing_driver = None
     if user_id:
@@ -295,6 +460,9 @@ def create_driver(
         )
         db.commit()
         db.refresh(db_driver)
+
+        # Query linked user to return actual username/email
+        linked_user = db.query(User).filter(User.id == db_driver.user_id).first()
         return {
             "id": db_driver.id,
             "name": db_driver.name,
@@ -309,20 +477,24 @@ def create_driver(
             "vehicle_type": db_driver.vehicle_type,
             "odometer_km": db_driver.odometer_km,
             "vehicle_id": db_driver.vehicle_id,
-            "username": (
-                driver.username if (driver.username and driver.password) else None
-            ),
+            "username": linked_user.username if linked_user else None,
             "password": (
-                driver.password if (driver.username and driver.password) else None
+                driver.password
+                if driver.password
+                else ("driver_secret123" if not driver.user_id else None)
             ),
         }
     except IntegrityError as e:
         db.rollback()
         err = str(e.orig).lower() if getattr(e, "orig", None) else str(e).lower()
         if "duplicate" in err or "unique" in err or "already exists" in err:
+            logger.warning(
+                f"Driver creation failed - driver with this phone already exists: {err}"
+            )
             raise HTTPException(
                 status_code=400, detail="Driver with this phone already exists"
             )
+        logger.error(f"Driver creation failed with database integrity error: {err}")
         raise HTTPException(status_code=400, detail="Database integrity error")
 
 
@@ -350,7 +522,7 @@ def get_drivers(
     license_expiry_before: Optional[datetime] = None,
     license_expiry_after: Optional[datetime] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles("admin", "dispatcher")),
+    current_user=Depends(get_current_user),
 ):
     """List drivers with pagination and optional filtering.
 
@@ -423,17 +595,167 @@ def get_dashboard_summary(
     }
 
 
+def compute_single_driver_scorecard(
+    driver: Driver, year: int, month: int, db: Session
+) -> Optional[DriverScorecardResponse]:
+    import calendar
+    from collections import defaultdict
+
+    from app.models.inspection import PreTripInspection
+
+    start_date = datetime(year, month, 1, 0, 0, 0)
+    _, last_day = calendar.monthrange(year, month)
+    end_date = datetime(year, month, last_day, 23, 59, 59, 999999)
+
+    period_trips = (
+        db.query(Trip)
+        .filter(
+            Trip.driver_id == driver.id,
+            Trip.created_at >= start_date,
+            Trip.created_at <= end_date,
+        )
+        .all()
+    )
+
+    if not period_trips:
+        return None
+
+    completed = [t for t in period_trips if t.status == "completed"]
+    cancelled = [t for t in period_trips if t.status == "cancelled"]
+    total = len(period_trips)
+    n_completed = len(completed)
+    n_cancelled = len(cancelled)
+
+    completion_rate = round((n_completed / total) * 100, 1) if total else 0.0
+    cancellation_rate = round((n_cancelled / total) * 100, 1) if total else 0.0
+
+    scheduled_trips = [t for t in completed if t.scheduled_date is not None]
+    on_time = [
+        t
+        for t in scheduled_trips
+        if t.arrived_at_source_time is not None
+        and t.arrived_at_source_time <= t.scheduled_date
+    ]
+    on_time_pickup_rate = (
+        round((len(on_time) / len(scheduled_trips)) * 100, 1)
+        if scheduled_trips
+        else 100.0
+    )
+
+    audited = [t for t in completed if t.audit_status in ("passed", "flagged")]
+    passed = [t for t in audited if t.audit_status == "passed"]
+    audit_pass_rate = round((len(passed) / len(audited)) * 100, 1) if audited else 100.0
+    flagged_trips = len(audited) - len(passed)
+
+    speeding_incidents = 0
+    for t in completed:
+        if t.distance_km and t.duration_hours and t.duration_hours > 0:
+            avg_speed = t.distance_km / t.duration_hours
+            if avg_speed > 60.0:
+                speeding_incidents += 1
+        elif t.audit_status == "flagged":
+            speeding_incidents += 1
+
+    inspections = (
+        db.query(PreTripInspection)
+        .filter(
+            PreTripInspection.driver_id == driver.id,
+            PreTripInspection.created_at >= start_date,
+            PreTripInspection.created_at <= end_date,
+        )
+        .all()
+    )
+    passed_inspections = sum(1 for insp in inspections if insp.is_safe)
+    inspection_pass_rate = (
+        round((passed_inspections / len(inspections)) * 100, 1)
+        if inspections
+        else 100.0
+    )
+
+    daily_minutes: dict = defaultdict(int)
+    for t in completed:
+        if t.start_time and t.duration_minutes:
+            day_key = t.start_time.date()
+            daily_minutes[day_key] += t.duration_minutes
+    fatigue_incidents = sum(1 for mins in daily_minutes.values() if mins > 480)
+
+    total_earnings = sum(t.estimated_fare or 0.0 for t in completed)
+    average_fare = (total_earnings / n_completed) if n_completed else 0.0
+    total_distance_km = sum(t.distance_km or 0.0 for t in completed)
+
+    safety_score = max(
+        0.0,
+        100.0
+        - (speeding_incidents * 10.0)
+        - (fatigue_incidents * 15.0)
+        - ((100.0 - inspection_pass_rate) * 0.5),
+    )
+    safety_score = round(safety_score, 1)
+
+    overall_score = round(
+        (completion_rate * 0.25)
+        + (on_time_pickup_rate * 0.25)
+        + (audit_pass_rate * 0.25)
+        + (safety_score * 0.25),
+        1,
+    )
+
+    bonus = 0.0
+    deduction = 0.0
+    if overall_score >= 90:
+        bonus = round(total_earnings * 0.10, 2)
+        note = "🏆 Exceptional safety & telematics performance — 10% earnings bonus"
+    elif overall_score >= 75:
+        bonus = round(total_earnings * 0.05, 2)
+        note = "✅ Good performance — 5% earnings bonus"
+    elif overall_score >= 60:
+        note = "📊 Satisfactory — standard payout"
+    elif overall_score >= 40:
+        deduction = round(total_earnings * 0.05, 2)
+        note = "⚠️ Below average — 5% safety penalty deduction"
+    else:
+        deduction = round(total_earnings * 0.10, 2)
+        note = "🚨 Poor safety performance — 10% safety penalty deduction"
+
+    return DriverScorecardResponse(
+        driver_id=driver.id,
+        name=driver.name,
+        phone=driver.phone,
+        year=year,
+        month=month,
+        total_trips=total,
+        completed_trips=n_completed,
+        cancelled_trips=n_cancelled,
+        completion_rate=completion_rate,
+        cancellation_rate=cancellation_rate,
+        on_time_pickup_rate=on_time_pickup_rate,
+        audit_pass_rate=audit_pass_rate,
+        flagged_trips=flagged_trips,
+        fatigue_incidents=fatigue_incidents,
+        speeding_incidents=speeding_incidents,
+        inspection_pass_rate=inspection_pass_rate,
+        safety_score=safety_score,
+        total_earnings=round(total_earnings, 2),
+        average_fare=round(average_fare, 2),
+        total_distance_km=round(total_distance_km, 2),
+        overall_score=overall_score,
+        bonus_recommendation=bonus,
+        deduction_recommendation=deduction,
+        incentive_note=note,
+    )
+
+
 @router.get("/scorecard", response_model=list[DriverScorecardResponse])
 def get_driver_scorecards(
     year: int = None,
     month: int = None,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles("admin", "dispatcher")),
+    current_user=Depends(require_roles("admin", "dispatcher", "driver")),
 ):
     """
-    Compute monthly KPI scorecards for all drivers.
+    Compute monthly KPI scorecards for all drivers (or only the current driver).
     Includes: completion rate, on-time pickup rate, audit pass rate,
-    fatigue incidents, earnings, and incentive recommendations.
+    fatigue incidents, safety score, and incentive recommendations.
     """
     now = get_now_ist_naive()
     if year is None:
@@ -441,134 +763,21 @@ def get_driver_scorecards(
     if month is None:
         month = now.month
 
-    period_start = datetime(year, month, 1, 0, 0, 0)
-    if month == 12:
-        period_end = datetime(year + 1, 1, 1, 0, 0, 0)
+    if current_user.role == "driver":
+        driver_profile = (
+            db.query(Driver).filter(Driver.user_id == current_user.id).first()
+        )
+        if not driver_profile:
+            raise HTTPException(status_code=404, detail="Driver profile not found")
+        drivers = [driver_profile]
     else:
-        period_end = datetime(year, month + 1, 1, 0, 0, 0)
+        drivers = db.query(Driver).all()
 
-    drivers = db.query(Driver).all()
     results = []
-
     for driver in drivers:
-        # All trips in the period
-        period_trips = (
-            db.query(Trip)
-            .filter(
-                Trip.driver_id == driver.id,
-                Trip.created_at >= period_start,
-                Trip.created_at < period_end,
-            )
-            .all()
-        )
-
-        if not period_trips:
-            continue
-
-        completed = [t for t in period_trips if t.status == "completed"]
-        cancelled = [t for t in period_trips if t.status == "cancelled"]
-        total = len(period_trips)
-        n_completed = len(completed)
-        n_cancelled = len(cancelled)
-
-        completion_rate = round((n_completed / total) * 100, 1) if total else 0.0
-        cancellation_rate = round((n_cancelled / total) * 100, 1) if total else 0.0
-
-        # On-time pickup: trips where arrived_at_source_time <= scheduled_date
-        scheduled_trips = [t for t in completed if t.scheduled_date is not None]
-        on_time = [
-            t
-            for t in scheduled_trips
-            if t.arrived_at_source_time is not None
-            and t.arrived_at_source_time <= t.scheduled_date
-        ]
-        on_time_pickup_rate = (
-            round((len(on_time) / len(scheduled_trips)) * 100, 1)
-            if scheduled_trips
-            else 100.0
-        )
-
-        # Audit pass rate
-        audited = [t for t in completed if t.audit_status in ("passed", "flagged")]
-        passed = [t for t in audited if t.audit_status == "passed"]
-        audit_pass_rate = (
-            round((len(passed) / len(audited)) * 100, 1) if audited else 100.0
-        )
-        flagged_trips = len(audited) - len(passed)
-
-        # Fatigue incidents: days where cumulative duration > 8h
-        from collections import defaultdict
-
-        daily_minutes: dict = defaultdict(int)
-        for t in completed:
-            if t.start_time and t.duration_minutes:
-                day_key = t.start_time.date()
-                daily_minutes[day_key] += t.duration_minutes
-        fatigue_incidents = sum(1 for mins in daily_minutes.values() if mins > 480)
-
-        # Earnings
-        total_earnings = sum(t.estimated_fare or 0.0 for t in completed)
-        average_fare = (total_earnings / n_completed) if n_completed else 0.0
-        total_distance_km = sum(t.distance_km or 0.0 for t in completed)
-
-        # Overall Score — weighted KPI composite
-        # (out of 100)
-        # completion_rate: 30%, on_time_pickup: 25%, audit_pass: 25%,
-        # fatigue penalty: 20%
-        fatigue_score = max(0.0, 100.0 - (fatigue_incidents * 15.0))
-        overall_score = round(
-            (completion_rate * 0.30)
-            + (on_time_pickup_rate * 0.25)
-            + (audit_pass_rate * 0.25)
-            + (fatigue_score * 0.20),
-            1,
-        )
-
-        # Incentive recommendation
-        bonus = 0.0
-        deduction = 0.0
-        if overall_score >= 90:
-            bonus = round(total_earnings * 0.10, 2)
-            note = "🏆 Exceptional performance — 10% earnings bonus recommended"
-        elif overall_score >= 75:
-            bonus = round(total_earnings * 0.05, 2)
-            note = "✅ Good performance — 5% earnings bonus recommended"
-        elif overall_score >= 60:
-            note = "📊 Satisfactory — no bonus or deduction"
-        elif overall_score >= 40:
-            deduction = round(total_earnings * 0.05, 2)
-            note = "⚠️ Below average — 5% commission deduction recommended"
-        else:
-            deduction = round(total_earnings * 0.10, 2)
-            note = (
-                "🚨 Poor performance — performance review + 10% deduction recommended"
-            )
-
-        results.append(
-            DriverScorecardResponse(
-                driver_id=driver.id,
-                name=driver.name,
-                phone=driver.phone,
-                year=year,
-                month=month,
-                total_trips=total,
-                completed_trips=n_completed,
-                cancelled_trips=n_cancelled,
-                completion_rate=completion_rate,
-                cancellation_rate=cancellation_rate,
-                on_time_pickup_rate=on_time_pickup_rate,
-                audit_pass_rate=audit_pass_rate,
-                flagged_trips=flagged_trips,
-                fatigue_incidents=fatigue_incidents,
-                total_earnings=round(total_earnings, 2),
-                average_fare=round(average_fare, 2),
-                total_distance_km=round(total_distance_km, 2),
-                overall_score=overall_score,
-                bonus_recommendation=bonus,
-                deduction_recommendation=deduction,
-                incentive_note=note,
-            )
-        )
+        scorecard = compute_single_driver_scorecard(driver, year, month, db)
+        if scorecard:
+            results.append(scorecard)
 
     results.sort(key=lambda x: x.overall_score, reverse=True)
     return results
@@ -805,14 +1014,27 @@ def get_driver_payments(
     )
 
 
+class DriverPayrollGenerateRequest(BaseModel):
+    year: Optional[int] = None
+    month: Optional[int] = None
+
+
 @router.post("/{driver_id}/payments/generate", response_model=DriverPaymentResponse)
 def generate_driver_payment(
     driver_id: int,
-    year: int = Query(...),
-    month: int = Query(...),
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    body: Optional[DriverPayrollGenerateRequest] = None,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles("admin", "dispatcher")),
 ):
+    target_year = year or (body.year if body else None)
+    target_month = month or (body.month if body else None)
+    if not target_year or not target_month:
+        raise HTTPException(status_code=400, detail="Both year and month are required")
+    year = target_year
+    month = target_month
+
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -841,11 +1063,13 @@ def generate_driver_payment(
     _, last_day = calendar.monthrange(year, month)
     end_date = datetime(year, month, last_day, 23, 59, 59, 999999)
 
+    # Filter out trips on audit hold or rejected
     trips_query = db.query(Trip).filter(
         Trip.driver_id == driver_id,
         Trip.status == "completed",
         Trip.end_time >= start_date,
         Trip.end_time <= end_date,
+        Trip.payout_status.notin_(["hold_audit", "rejected"]),
     )
     completed_trips = trips_query.all()
     total_fares = sum(float(t.estimated_fare or 0.0) for t in completed_trips)
@@ -864,10 +1088,118 @@ def generate_driver_payment(
         or 0.0
     )
 
+    # Check for pending or rejected fuel card fraud logs
+    rejected_fuel_costs = 0.0
+    has_pending_fraud = False
+
+    all_fuel_logs = (
+        db.query(FuelLog)
+        .filter(
+            FuelLog.driver_id == driver_id,
+            FuelLog.created_at >= start_date,
+            FuelLog.created_at <= end_date,
+        )
+        .all()
+    )
+
+    for fl in all_fuel_logs:
+        if fl.is_flagged_fraud:
+            if fl.audit_status == "pending":
+                has_pending_fraud = True
+            elif fl.audit_status == "rejected":
+                rejected_fuel_costs += float(fl.cost or 0.0)
+
+    # Calculate route divergence fuel penalties
+    from app.api.fuel import VEHICLE_FUEL_RATES, get_diesel_rate
+
+    total_divergence_penalty = 0.0
+    v_type = driver.vehicle_type or "cargo_truck"
+    consumption_rate_100 = VEHICLE_FUEL_RATES.get(v_type, 12.0)
+
+    try:
+        rates_data = get_diesel_rate(current_user=None)
+    except Exception:
+        rates_data = {"national_average": 97.83, "cities": {}}
+
+    for t in completed_trips:
+        actual_distance = 0.0
+        if t.odo_distance_km is not None and t.odo_distance_km > 0.0:
+            actual_distance = float(t.odo_distance_km)
+        elif t.gps_distance_km is not None and t.gps_distance_km > 0.0:
+            actual_distance = float(t.gps_distance_km)
+        else:
+            actual_distance = float(t.distance_km or 0.0)
+
+        planned_distance = float(t.distance_km or 0.0)
+
+        if actual_distance > planned_distance:
+            excess_km = actual_distance - planned_distance
+            excess_liters = excess_km * (consumption_rate_100 / 100.0)
+
+            # Find local diesel rate based on source or destination city
+            diesel_price = None
+            if t.source or t.destination:
+                cities = rates_data.get("cities", {})
+                for city, price in cities.items():
+                    if (
+                        city.lower() in (t.source or "").lower()
+                        or city.lower() in (t.destination or "").lower()
+                    ):
+                        diesel_price = price
+                        break
+            if diesel_price is None:
+                diesel_price = rates_data.get("national_average", 97.83)
+
+            penalty = excess_liters * diesel_price
+            total_divergence_penalty += penalty
+
+    total_divergence_penalty = round(total_divergence_penalty, 2)
+
+    # Compute Driver Safety Telematics Scorecard for auto bonus/deduction injection
+    scorecard = compute_single_driver_scorecard(driver, year, month, db)
+    scorecard_bonus = scorecard.bonus_recommendation if scorecard else 0.0
+    scorecard_deduction = scorecard.deduction_recommendation if scorecard else 0.0
+
     commission = total_fares * (driver.commission_percentage / 100.0)
     base_salary_payout = driver.base_salary
-    deductions_val = float(personal_fuel_deductions)
-    total_paid = base_salary_payout + commission - deductions_val
+
+    personal_fuel_val = float(personal_fuel_deductions)
+    deductions_val = (
+        personal_fuel_val
+        + total_divergence_penalty
+        + rejected_fuel_costs
+        + scorecard_deduction
+    )
+    total_paid = base_salary_payout + commission + scorecard_bonus - deductions_val
+
+    # Format explanatory note
+    note_parts = []
+    if scorecard_bonus > 0.0 and scorecard:
+        note_parts.append(
+            f"₹{scorecard_bonus:.2f} safety performance bonus "
+            f"(Score: {scorecard.overall_score}/100)"
+        )
+    if scorecard_deduction > 0.0 and scorecard:
+        note_parts.append(
+            f"₹{scorecard_deduction:.2f} safety score penalty deduction "
+            f"(Score: {scorecard.overall_score}/100)"
+        )
+    if personal_fuel_val > 0.0:
+        note_parts.append(f"₹{personal_fuel_val:.2f} personal fuel deductions")
+    if total_divergence_penalty > 0.0:
+        note_parts.append(
+            f"₹{total_divergence_penalty:.2f} unauthorized route divergence penalties"
+        )
+    if rejected_fuel_costs > 0.0:
+        note_parts.append(
+            f"₹{rejected_fuel_costs:.2f} fuel card fraud audit deductions"
+        )
+
+    payment_note = ""
+    if note_parts:
+        payment_note = "Includes: " + " and ".join(note_parts) + "."
+    else:
+        payment_note = "Regular monthly payout statement."
 
     db_payment = DriverPayment(
         driver_id=driver_id,
@@ -875,18 +1207,20 @@ def generate_driver_payment(
         month=month,
         base_salary_paid=base_salary_payout,
         commission_paid=commission,
-        bonus=0.0,
+        bonus=scorecard_bonus,
         deductions=deductions_val,
         total_paid=total_paid,
-        status="pending",
+        status="hold_audit" if has_pending_fraud else "pending",
+        note=payment_note,
     )
     db.add(db_payment)
     try:
         db.commit()
         db.refresh(db_payment)
         return db_payment
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
+        logger.error(f"Database integrity error during payment generation: {e}")
         raise HTTPException(
             status_code=400, detail="Database integrity error during payment generation"
         )
@@ -911,6 +1245,10 @@ def update_driver_payment(
         payment.bonus = payment_update.bonus
     if payment_update.deductions is not None:
         payment.deductions = payment_update.deductions
+    if payment_update.advance_payment is not None:
+        payment.advance_payment = payment_update.advance_payment
+    if payment_update.personal_fuel_expense is not None:
+        payment.personal_fuel_expense = payment_update.personal_fuel_expense
     if payment_update.status is not None:
         payment.status = payment_update.status
         if payment_update.status == "paid":
@@ -926,14 +1264,17 @@ def update_driver_payment(
         + payment.commission_paid
         + payment.bonus
         - payment.deductions
+        - payment.advance_payment
+        - payment.personal_fuel_expense
     )
 
     try:
         db.commit()
         db.refresh(payment)
         return payment
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
+        logger.error(f"Database integrity error during payment update: {e}")
         raise HTTPException(
             status_code=400, detail="Database integrity error during payment update"
         )
@@ -1149,6 +1490,78 @@ def update_driver(
     if "vehicle_id" in driver_update.model_fields_set:
         driver.vehicle_id = driver_update.vehicle_id
 
+    # Handle credential updates for the driver's User account
+    if (
+        driver_update.username is not None
+        or driver_update.password is not None
+        or driver_update.email is not None
+    ):
+        from app.core.security import hash_password
+        from app.models.user import User
+
+        if driver.user:
+            if driver_update.username is not None:
+                existing_user = (
+                    db.query(User)
+                    .filter(
+                        User.username == driver_update.username,
+                        User.id != driver.user_id,
+                    )
+                    .first()
+                )
+                if existing_user:
+                    raise HTTPException(
+                        status_code=400, detail="Username is already registered"
+                    )
+                driver.user.username = driver_update.username
+
+            if driver_update.email is not None:
+                existing_email = (
+                    db.query(User)
+                    .filter(
+                        User.email == driver_update.email, User.id != driver.user_id
+                    )
+                    .first()
+                )
+                if existing_email:
+                    raise HTTPException(
+                        status_code=400, detail="Email is already registered"
+                    )
+                driver.user.email = driver_update.email
+
+            if driver_update.password is not None:
+                driver.user.hashed_password = hash_password(driver_update.password)
+        else:
+            # Create a user account on the fly if it didn't exist (legacy driver)
+            username = driver_update.username or driver.phone
+            email = driver_update.email or f"{username}@example.com"
+            password = driver_update.password or "driver_secret123"
+
+            existing_user = (
+                db.query(User)
+                .filter((User.username == username) | (User.email == email))
+                .first()
+            )
+            if existing_user:
+                if existing_user.role == "driver":
+                    driver.user_id = existing_user.id
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"User with username '{username}' or email '{email}' already exists with role '{existing_user.role}'.",
+                    )
+            else:
+                db_user = User(
+                    username=username,
+                    email=email,
+                    hashed_password=hash_password(password),
+                    role="driver",
+                    is_active=True,
+                )
+                db.add(db_user)
+                db.flush()
+                driver.user_id = db_user.id
+
     try:
         db.commit()
         db.refresh(driver)
@@ -1157,9 +1570,13 @@ def update_driver(
         db.rollback()
         err = str(e.orig).lower() if getattr(e, "orig", None) else str(e).lower()
         if "duplicate" in err or "unique" in err or "already exists" in err:
+            logger.warning(
+                f"Driver update failed - driver with this phone already exists: {err}"
+            )
             raise HTTPException(
                 status_code=400, detail="Driver with this phone already exists"
             )
+        logger.error(f"Driver update failed with database integrity error: {err}")
         raise HTTPException(status_code=400, detail="Database integrity error")
 
 
@@ -1524,3 +1941,155 @@ def get_payment_invoice(
 
     headers = {"Content-Disposition": f"attachment; filename=invoice_{payment_id}.pdf"}
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
+
+
+@router.get("/payments/{payment_id}/payslip")
+def get_driver_payslip(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    payment = db.query(DriverPayment).filter(DriverPayment.id == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment record not found")
+
+    driver = db.query(Driver).filter(Driver.id == payment.driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Associated driver not found")
+
+    if current_user.role == "driver":
+        if driver.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to view payslip for this payment",
+            )
+
+    from calendar import monthrange
+
+    _, last_day = monthrange(payment.year, payment.month)
+    start_dt = datetime(payment.year, payment.month, 1, 0, 0, 0)
+    end_dt = datetime(payment.year, payment.month, last_day, 23, 59, 59)
+
+    completed_trips = (
+        db.query(Trip)
+        .filter(
+            Trip.driver_id == driver.id,
+            Trip.status == "completed",
+            Trip.end_time >= start_dt,
+            Trip.end_time <= end_dt,
+        )
+        .all()
+    )
+
+    from app.models.expense import TripExpense
+
+    approved_expenses = (
+        db.query(TripExpense)
+        .filter(
+            TripExpense.driver_id == driver.id,
+            TripExpense.status.in_(["approved", "settled"]),
+            TripExpense.created_at >= start_dt,
+            TripExpense.created_at <= end_dt,
+        )
+        .all()
+    )
+
+    total_expense_allowances = sum(e.amount for e in approved_expenses)
+
+    earnings_items = [
+        {
+            "category": "Base Salary",
+            "description": f"Fixed Monthly Salary Base ({payment.month:02d}/{payment.year})",
+            "amount": round(payment.base_salary_paid, 2),
+        },
+        {
+            "category": "Trip Commissions",
+            "description": f"Commission for {len(completed_trips)} Completed Dispatches",
+            "amount": round(payment.commission_paid, 2),
+        },
+    ]
+
+    if total_expense_allowances > 0:
+        earnings_items.append(
+            {
+                "category": "Expense Reimbursements",
+                "description": f"Toll, Lodging & Food Allowances ({len(approved_expenses)} claims)",
+                "amount": round(total_expense_allowances, 2),
+            }
+        )
+
+    if payment.bonus > 0:
+        earnings_items.append(
+            {
+                "category": "Performance Bonus",
+                "description": "Safety & Punctuality Excellence Incentive",
+                "amount": round(payment.bonus, 2),
+            }
+        )
+
+    deductions_items = []
+    if payment.deductions > 0:
+        deductions_items.append(
+            {
+                "category": "Compliance / Fuel Deductions",
+                "description": "Fuel Theft Audit Penalty / Cargo Damage Deduction",
+                "amount": round(payment.deductions, 2),
+            }
+        )
+
+    if payment.advance_payment > 0:
+        deductions_items.append(
+            {
+                "category": "Salary Advances Issued",
+                "description": "Mid-Month Cash / Salary Advance Disbursed",
+                "amount": round(payment.advance_payment, 2),
+            }
+        )
+
+    if payment.personal_fuel_expense > 0:
+        deductions_items.append(
+            {
+                "category": "Personal Fuel Expense",
+                "description": "Non-Commercial / Unauthorized Personal Vehicle Refueling",
+                "amount": round(payment.personal_fuel_expense, 2),
+            }
+        )
+
+    gross_earnings = sum(item["amount"] for item in earnings_items)
+    total_deductions = sum(item["amount"] for item in deductions_items)
+    net_salary = round(
+        (
+            payment.total_paid
+            if payment.total_paid > 0
+            else (gross_earnings - total_deductions)
+        ),
+        2,
+    )
+
+    period_str = datetime(payment.year, payment.month, 1).strftime("%B %Y")
+    paid_str = (
+        payment.paid_at.strftime("%d %b %Y, %I:%M %p") if payment.paid_at else None
+    )
+
+    return {
+        "payslip_number": f"PAY-{payment.year}{payment.month:02d}-{payment.id:04d}",
+        "payment_id": payment.id,
+        "driver_id": driver.id,
+        "driver_name": driver.name,
+        "driver_phone": driver.phone,
+        "license_number": driver.license_number,
+        "vehicle_type": driver.vehicle_type,
+        "year": payment.year,
+        "month": payment.month,
+        "period_label": period_str,
+        "status": payment.status,
+        "paid_at": paid_str,
+        "payment_method": payment.payment_method or "Bank Transfer (IMPS/NEFT)",
+        "note": payment.note,
+        "completed_trips_count": len(completed_trips),
+        "earnings_items": earnings_items,
+        "deductions_items": deductions_items,
+        "gross_earnings": gross_earnings,
+        "total_deductions": total_deductions,
+        "net_salary": net_salary,
+    }

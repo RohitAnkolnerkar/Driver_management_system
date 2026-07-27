@@ -2791,7 +2791,8 @@ def test_driver_payout_generation_and_settlement(client, db_session):
     payout_data = gen_res.json()
     assert payout_data["base_salary_paid"] == 20000.0
     assert payout_data["commission_paid"] == 150.0
-    assert payout_data["total_paid"] == 20150.0
+    assert payout_data["bonus"] == 20.0
+    assert payout_data["total_paid"] == 20170.0
     assert payout_data["status"] == "pending"
 
     # Try generating again (should fail due to unique constraint)

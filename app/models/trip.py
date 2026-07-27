@@ -37,6 +37,8 @@ class Trip(Base):
     is_regular = Column(Boolean, nullable=False, default=False)
     scheduled_date = Column(DateTime, nullable=True)
     priority = Column(String, nullable=False, default="normal")
+    cargo_weight_kg = Column(Float, nullable=True)
+    cargo_volume_m3 = Column(Float, nullable=True)
 
     status = Column(
         String, default="created"
@@ -45,6 +47,13 @@ class Trip(Base):
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
     arrived_at_source_time = Column(DateTime, nullable=True)
+
+    detention_start_time = Column(DateTime, nullable=True)
+    detention_end_time = Column(DateTime, nullable=True)
+    detention_grace_minutes = Column(Integer, default=120)
+    detention_hourly_rate = Column(Float, default=500.0)
+    detention_billable_hours = Column(Float, default=0.0)
+    detention_charge = Column(Float, default=0.0)
 
     created_at = Column(DateTime, default=get_now_ist_naive)
 
@@ -111,3 +120,15 @@ class TripHistory(Base):
     note = Column(String, nullable=True)
 
     trip = relationship("Trip", back_populates="history")
+
+
+class ProofOfDelivery(Base):
+    __tablename__ = "proof_of_deliveries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False, unique=True)
+    recipient_name = Column(String, nullable=False)
+    recipient_signature = Column(String, nullable=True)
+    delivery_notes = Column(String, nullable=True)
+    delivered_at = Column(DateTime, default=get_now_ist_naive)
+    geofence_verified = Column(Boolean, default=True)

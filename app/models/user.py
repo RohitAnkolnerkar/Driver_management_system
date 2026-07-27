@@ -20,6 +20,5 @@ class User(Base):
         "Driver",
         back_populates="user",
         uselist=False,
-        primaryjoin="User.id == Driver.user_id",
-        foreign_keys="[Driver.user_id]",
+        foreign_keys="Driver.user_id",
     )
