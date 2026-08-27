@@ -5,8 +5,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
 from app.api.deps import get_db, require_roles
 from app.api.driver import compute_single_driver_scorecard
 from app.api.trip import geocode_location, get_driver_fatigue_hours
@@ -14,6 +12,8 @@ from app.core.time_utils import get_now_ist_naive
 from app.models.driver import Driver, DriverAvailabilityHistory
 from app.models.trip import Trip
 from app.schemas.matchmaking import DriverMatchScore, MatchmakingRecommendationResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trips", tags=["matchmaking"])
 
@@ -89,8 +89,12 @@ def calculate_driver_match_scores(
         # Safety & Telematics Scorecard (0 to 10 points)
         safety_index = 85.0
         try:
-            scorecard = compute_single_driver_scorecard(driver.id, db)
-            safety_index = scorecard.safety_score
+            now_dt = get_now_ist_naive()
+            scorecard = compute_single_driver_scorecard(
+                driver, now_dt.year, now_dt.month, db
+            )
+            if scorecard:
+                safety_index = scorecard.safety_score
         except Exception:
             pass
         safety_score = (safety_index / 100.0) * 10.0

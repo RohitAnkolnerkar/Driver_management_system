@@ -11,7 +11,14 @@ class VehicleBase(BaseModel):
     license_plate: str
     odometer_km: float = 0.0
     status: str = "active"
+    vehicle_type: str = "cargo_truck"
     fasttag_balance: float = 1000.0
+    chassis_number: Optional[str] = None
+    engine_number: Optional[str] = None
+    registration_date: Optional[datetime] = None
+    insurance_expiry_date: Optional[datetime] = None
+    fitness_expiry_date: Optional[datetime] = None
+    puc_expiry_date: Optional[datetime] = None
 
 
 class VehicleCreate(VehicleBase):
@@ -22,10 +29,32 @@ class VehicleUpdate(BaseModel):
     make: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None
+    vehicle_type: Optional[str] = None
     license_plate: Optional[str] = None
     odometer_km: Optional[float] = None
     status: Optional[str] = None
     fasttag_balance: Optional[float] = None
+    chassis_number: Optional[str] = None
+    engine_number: Optional[str] = None
+    registration_date: Optional[datetime] = None
+    insurance_expiry_date: Optional[datetime] = None
+    fitness_expiry_date: Optional[datetime] = None
+    puc_expiry_date: Optional[datetime] = None
+
+
+class VehicleDocumentOCRResponse(BaseModel):
+    document_type: str
+    license_plate: Optional[str] = None
+    make: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    chassis_number: Optional[str] = None
+    engine_number: Optional[str] = None
+    registration_date: Optional[str] = None
+    insurance_expiry_date: Optional[str] = None
+    fitness_expiry_date: Optional[str] = None
+    puc_expiry_date: Optional[str] = None
+    confidence: float
 
 
 class VehicleResponse(VehicleBase):

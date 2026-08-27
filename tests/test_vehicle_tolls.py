@@ -3,7 +3,7 @@ import pytest
 from app.core.jwt import create_access_token
 from app.core.security import hash_password
 from app.models.user import User
-from app.models.vehicle import Vehicle, VehicleTollLog
+from app.models.vehicle import Vehicle
 
 
 @pytest.fixture

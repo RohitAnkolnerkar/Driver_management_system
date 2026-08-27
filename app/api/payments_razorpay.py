@@ -72,11 +72,6 @@ class VerifyPaymentResponse(BaseModel):
     payment_id: str
 
 
-# ─────────────────────────────────────────────────────────────
-# Endpoints
-# ─────────────────────────────────────────────────────────────
-
-
 @router.post("/create-order", response_model=CreateOrderResponse)
 def create_razorpay_order(
     body: CreateOrderRequest,

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { CreditCard, AlertTriangle, RefreshCw, DollarSign, ArrowUpRight, Search, PlusCircle, CheckCircle, Clock } from "lucide-react";
+import { RazorpayButton } from "./RazorpayButton";
 
 interface Props {
   apiFetch: (url: string, options?: RequestInit) => Promise<any>;
@@ -512,7 +513,7 @@ export const FASTagDashboard: React.FC<Props> = ({ apiFetch }) => {
               </div>
             </div>
 
-            <form onSubmit={handleRecharge} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <form onSubmit={(e) => e.preventDefault()} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" style={{ fontSize: '12px' }}>Recharge Amount (₹) *</label>
                 <input
@@ -560,29 +561,38 @@ export const FASTagDashboard: React.FC<Props> = ({ apiFetch }) => {
                   type="button"
                   onClick={() => setShowRechargeModal(null)}
                   className="btn btn-secondary"
-                  style={{ flex: 1, height: '38px' }}
-                  disabled={recharging}
+                  style={{ flex: 1, height: '40px' }}
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  style={{ flex: 1, height: '38px', gap: '6px' }}
-                  disabled={recharging || !rechargeAmount}
-                >
-                  {recharging ? (
-                    <>
-                      <RefreshCw size={13} className="animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <ArrowUpRight size={14} />
-                      Complete Payment
-                    </>
-                  )}
-                </button>
+                <div style={{ flex: 1 }}>
+                  <RazorpayButton
+                    apiFetch={apiFetch}
+                    amount={parseFloat(rechargeAmount) || 0}
+                    vehicleId={showRechargeModal.id}
+                    label="Complete Payment"
+                    description={`FASTag Recharge for ${showRechargeModal.license_plate}`}
+                    onSuccess={(res: any) => {
+                      setActionSuccess(res.message || "Recharged successfully!");
+                      // Update local vehicle state immediately
+                      setVehicles(prev => prev.map(v => 
+                        v.id === showRechargeModal.id 
+                          ? { ...v, fasttag_balance: res.new_fasttag_balance ?? (v.fasttag_balance + parseFloat(rechargeAmount)) } 
+                          : v
+                      ));
+                      setRechargeAmount("");
+                      setTimeout(() => {
+                        setShowRechargeModal(null);
+                        setActionSuccess(null);
+                        fetchData();
+                      }, 1500);
+                    }}
+                    onError={(err: string) => {
+                      setActionError(err);
+                    }}
+                    disabled={!rechargeAmount || parseFloat(rechargeAmount) <= 0}
+                  />
+                </div>
               </div>
             </form>
           </div>

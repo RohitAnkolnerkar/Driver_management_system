@@ -1,5 +1,6 @@
 import datetime
 import io
+import logging
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -7,6 +8,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from app.core.time_utils import get_now_ist_naive
+
+logger = logging.getLogger(__name__)
 
 
 def generate_payout_pdf(payment, driver) -> io.BytesIO:
@@ -418,6 +421,229 @@ def generate_trips_manifest_pdf(trips) -> io.BytesIO:
 
     manifest_table.setStyle(t_style)
     elements.append(manifest_table)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_invoice_pdf(data: dict) -> io.BytesIO:
+    """
+    Generates a beautifully formatted PDF invoice statement for a completed dispatch
+    and returns it as an in-memory BytesIO stream.
+    """
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+
+    styles = getSampleStyleSheet()
+
+    primary_color = colors.HexColor("#1e293b")  # slate-800
+    text_color = colors.HexColor("#334155")  # slate-700
+
+    title_style = ParagraphStyle(
+        "InvoiceTitle",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=24,
+        leading=28,
+        textColor=primary_color,
+        spaceAfter=12,
+    )
+
+    subtitle_style = ParagraphStyle(
+        "InvoiceSubtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=14,
+        textColor=text_color,
+    )
+
+    header_style = ParagraphStyle(
+        "InvoiceHeader",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        leading=16,
+        textColor=primary_color,
+        spaceBefore=10,
+        spaceAfter=6,
+    )
+
+    cell_style = ParagraphStyle(
+        "TableCell",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+        textColor=text_color,
+    )
+
+    cell_bold_style = ParagraphStyle(
+        "TableCellBold",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=12,
+        textColor=primary_color,
+    )
+
+    elements = []
+
+    # Title / Company block
+    elements.append(Paragraph("DISPATCH FREIGHT INVOICE", title_style))
+    elements.append(
+        Paragraph(f"Invoice Number: {data['invoice_number']}", subtitle_style)
+    )
+    elements.append(Paragraph(f"Issue Date: {data['issue_date']}", subtitle_style))
+    elements.append(Spacer(1, 15))
+
+    # Bill To / Details layout table
+    details_data = [
+        [
+            Paragraph("<b>CLIENT BILL TO:</b>", cell_bold_style),
+            Paragraph("<b>DISPATCH DETAILS:</b>", cell_bold_style),
+        ],
+        [
+            Paragraph(f"{data['client_name']}", cell_style),
+            Paragraph(f"Trip ID: #{data['trip_id']}", cell_style),
+        ],
+        [Paragraph("", cell_style), Paragraph(f"Source: {data['source']}", cell_style)],
+        [
+            Paragraph("", cell_style),
+            Paragraph(f"Destination: {data['destination']}", cell_style),
+        ],
+        [
+            Paragraph("", cell_style),
+            Paragraph(f"Vehicle Type: {data.get('vehicle_type') or 'N/A'}", cell_style),
+        ],
+        [
+            Paragraph("", cell_style),
+            Paragraph(f"Driver Name: {data.get('driver_name') or 'N/A'}", cell_style),
+        ],
+    ]
+
+    details_table = Table(details_data, colWidths=[270, 270])
+    details_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
+    )
+    elements.append(details_table)
+    elements.append(Spacer(1, 20))
+
+    # Line Items Table
+    elements.append(Paragraph("TARIFF BREAKDOWN", header_style))
+    table_headers = [
+        Paragraph("<b>Description</b>", cell_bold_style),
+        Paragraph("<b>Amount</b>", cell_bold_style),
+    ]
+
+    table_data = [table_headers]
+    for item in data["line_items"]:
+        table_data.append(
+            [
+                Paragraph(item["description"], cell_style),
+                Paragraph(f"INR {item['amount']:.2f}", cell_style),
+            ]
+        )
+
+    table_data.append(
+        [
+            Paragraph("<b>Subtotal</b>", cell_bold_style),
+            Paragraph(f"<b>INR {data['subtotal']:.2f}</b>", cell_bold_style),
+        ]
+    )
+    table_data.append(
+        [
+            Paragraph(f"GST ({data['tax_rate_percent']}%)", cell_style),
+            Paragraph(f"INR {data['tax_amount']:.2f}", cell_style),
+        ]
+    )
+    table_data.append(
+        [
+            Paragraph("<b>Total Amount Due</b>", cell_bold_style),
+            Paragraph(f"<b>INR {data['total_amount']:.2f}</b>", cell_bold_style),
+        ]
+    )
+
+    item_table = Table(table_data, colWidths=[400, 140])
+    item_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("BACKGROUND", (0, -3), (-1, -1), colors.HexColor("#f8fafc")),
+            ]
+        )
+    )
+    elements.append(item_table)
+    elements.append(Spacer(1, 20))
+
+    # Electronic Proof of Delivery (e-POD) Section
+    if data.get("pod"):
+        pod_info = data["pod"]
+        elements.append(Paragraph("ELECTRONIC PROOF OF DELIVERY (e-POD)", header_style))
+
+        sig_flowable = Paragraph("<i>No digital signature image</i>", cell_style)
+        if pod_info.get("signature_data"):
+            try:
+                import base64
+
+                from reportlab.platypus import Image as RLImage
+
+                sig_str = pod_info["signature_data"]
+                if "," in sig_str:
+                    sig_str = sig_str.split(",")[1]
+                img_bytes = base64.b64decode(sig_str)
+                img_buf = io.BytesIO(img_bytes)
+                sig_flowable = RLImage(img_buf, width=140, height=50)
+            except Exception as e:
+                logger.warning(f"Failed to decode Base64 signature for PDF: {e}")
+
+        pod_meta_text = (
+            f"<b>Recipient:</b> {pod_info.get('recipient_name', 'N/A')}<br/>"
+            f"<b>Phone:</b> {pod_info.get('recipient_phone') or 'N/A'}<br/>"
+            f"<b>Delivered At:</b> {pod_info.get('delivered_at', 'N/A')}<br/>"
+            f"<b>Verification:</b> <font color='#16a34a'><b>✔ OFFICIALLY VERIFIED POD</b></font>"
+        )
+
+        pod_table_data = [[Paragraph(pod_meta_text, cell_style), sig_flowable]]
+
+        pod_table = Table(pod_table_data, colWidths=[360, 180])
+        pod_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f0fdf4")),
+                    ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#bbf7d0")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("PADDING", (0, 0), (-1, -1), 8),
+                ]
+            )
+        )
+        elements.append(pod_table)
+        elements.append(Spacer(1, 20))
+
+    elements.append(
+        Paragraph(
+            "<b>Terms & Conditions:</b> Payment is due immediately upon manifest delivery verification. Thank you for your business.",
+            subtitle_style,
+        )
+    )
 
     doc.build(elements)
     buffer.seek(0)

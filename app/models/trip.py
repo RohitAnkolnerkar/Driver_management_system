@@ -47,6 +47,10 @@ class Trip(Base):
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
     arrived_at_source_time = Column(DateTime, nullable=True)
+    arrived_at_destination_time = Column(DateTime, nullable=True)
+
+    geofence_origin_radius_m = Column(Float, default=500.0, nullable=False)
+    geofence_dest_radius_m = Column(Float, default=500.0, nullable=False)
 
     detention_start_time = Column(DateTime, nullable=True)
     detention_end_time = Column(DateTime, nullable=True)
@@ -120,15 +124,3 @@ class TripHistory(Base):
     note = Column(String, nullable=True)
 
     trip = relationship("Trip", back_populates="history")
-
-
-class ProofOfDelivery(Base):
-    __tablename__ = "proof_of_deliveries"
-
-    id = Column(Integer, primary_key=True, index=True)
-    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False, unique=True)
-    recipient_name = Column(String, nullable=False)
-    recipient_signature = Column(String, nullable=True)
-    delivery_notes = Column(String, nullable=True)
-    delivered_at = Column(DateTime, default=get_now_ist_naive)
-    geofence_verified = Column(Boolean, default=True)

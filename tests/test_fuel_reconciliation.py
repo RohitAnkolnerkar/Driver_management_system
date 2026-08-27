@@ -1,8 +1,5 @@
-import pytest
-
 from app.core.time_utils import get_now_ist_naive
 from app.models.driver import Driver, DriverPayment
-from app.models.fuel import FuelLog
 from app.models.trip import Trip
 
 

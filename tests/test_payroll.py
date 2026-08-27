@@ -1,10 +1,8 @@
-from datetime import datetime
-
 import pytest
 
 from app.core.jwt import create_access_token
 from app.core.security import hash_password
-from app.models.driver import Driver, DriverPayment
+from app.models.driver import Driver
 from app.models.user import User
 
 

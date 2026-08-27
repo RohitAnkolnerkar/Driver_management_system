@@ -7,12 +7,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app.core.logging_config import request_id_ctx, setup_logging
-
-setup_logging()
-
-logger = logging.getLogger("app.request")
-
 import app.models as app_models  # noqa: F401
 from app.api import (
     auth,
@@ -25,6 +19,8 @@ from app.api import (
     fuel_theft,
     invoice,
     matchmaking,
+    notification,
+    ocr,
     payments_razorpay,
     pod,
     pricing,
@@ -34,6 +30,11 @@ from app.api import (
     ws,
 )
 from app.config import settings
+from app.core.logging_config import request_id_ctx, setup_logging
+
+setup_logging()
+
+logger = logging.getLogger("app.request")
 
 app = FastAPI()
 SITE_HTML = Path(__file__).resolve().parent / "templates" / "site.html"
@@ -97,6 +98,8 @@ app.include_router(fuel_theft.router)
 app.include_router(expense.router)
 app.include_router(finance.router)
 app.include_router(payments_razorpay.router)
+app.include_router(notification.router)
+app.include_router(ocr.router)
 
 
 @app.get("/")

@@ -1969,15 +1969,22 @@ def test_get_my_driver_profile_success(client):
     assert profile_res.status_code == 200
     user_id = profile_res.json()["id"]
 
+    # Get driver profile ID from the auto-created stub profile
+    profile_res_me = client.get(
+        "/drivers/profile/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert profile_res_me.status_code == 200
+    driver_id = profile_res_me.json()["id"]
+
     disp_token = get_token(client)
-    res = client.post(
-        "/drivers/",
+    res = client.patch(
+        f"/drivers/{driver_id}",
         json={
             "name": "Linked Driver",
             "phone": "5559990000",
             "license_number": "UP-12-2018-0004567",
             "license_expiry": "2030-01-01T00:00:00",
-            "user_id": user_id,
         },
         headers={"Authorization": f"Bearer {disp_token}"},
     )
@@ -2266,21 +2273,24 @@ def test_get_trip_history_as_assigned_driver_success(client):
     )
     d1_token = get_token(client, username="driver_1", password="secret123")
 
-    profile_res = client.get(
-        "/users/me", headers={"Authorization": f"Bearer {d1_token}"}
-    )
-    user_id = profile_res.json()["id"]
+    client.get("/users/me", headers={"Authorization": f"Bearer {d1_token}"})
 
     create_user(client)
     disp_token = get_token(client)
-    driver = client.post(
-        "/drivers/",
+    profile_res_me = client.get(
+        "/drivers/profile/me",
+        headers={"Authorization": f"Bearer {d1_token}"},
+    )
+    assert profile_res_me.status_code == 200
+    driver_id = profile_res_me.json()["id"]
+
+    driver = client.patch(
+        f"/drivers/{driver_id}",
         json={
             "name": "Driver 1",
             "phone": "5558880001",
             "license_number": "MP-12-2018-0004567",
             "license_expiry": "2030-01-01T00:00:00",
-            "user_id": user_id,
         },
         headers={"Authorization": f"Bearer {disp_token}"},
     ).json()
@@ -2316,9 +2326,8 @@ def test_get_trip_history_as_unassigned_driver_fails(client):
         },
     )
     d1_token = get_token(client, username="driver_1", password="secret123")
-    user_id_1 = client.get(
-        "/users/me", headers={"Authorization": f"Bearer {d1_token}"}
-    ).json()["id"]
+
+    client.get("/users/me", headers={"Authorization": f"Bearer {d1_token}"})
 
     client.post(
         "/users/",
@@ -2333,14 +2342,20 @@ def test_get_trip_history_as_unassigned_driver_fails(client):
 
     create_user(client)
     disp_token = get_token(client)
-    driver_1 = client.post(
-        "/drivers/",
+    profile_res_me_1 = client.get(
+        "/drivers/profile/me",
+        headers={"Authorization": f"Bearer {d1_token}"},
+    )
+    assert profile_res_me_1.status_code == 200
+    driver_id_1 = profile_res_me_1.json()["id"]
+
+    driver_1 = client.patch(
+        f"/drivers/{driver_id_1}",
         json={
             "name": "Driver 1",
             "phone": "5558880001",
             "license_number": "MP-12-2018-0004567",
             "license_expiry": "2030-01-01T00:00:00",
-            "user_id": user_id_1,
         },
         headers={"Authorization": f"Bearer {disp_token}"},
     ).json()
@@ -2465,7 +2480,6 @@ def test_create_driver_with_credentials(client):
     assert response.status_code == 200
     driver_res = response.json()
     assert driver_res["username"] == "new_driver_user"
-    assert driver_res["password"] == "driver_secret_password"
     assert driver_res["user_id"] is not None
 
     # 2. Verify we can log in with these new driver credentials

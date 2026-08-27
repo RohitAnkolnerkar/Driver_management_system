@@ -2,7 +2,15 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    status,
+)
 from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session, selectinload
 
@@ -230,7 +238,7 @@ def geocode_location(address: str, strict: bool = False) -> tuple[float, float, 
                 lon = float(data[0]["lon"])
                 display_name = data[0]["display_name"]
                 return lat, lon, display_name
-    except Exception as err:
+    except Exception:
         pass
 
     # 4. Check known city lookup table
@@ -281,6 +289,24 @@ def calculate_estimated_fare(
         estimated_fare += duration_minutes * per_minute
 
     return round(estimated_fare, 2)
+
+
+def verify_vehicle_compliance(vehicle: Vehicle):
+    from app.core.time_utils import get_now_ist_naive
+
+    now = get_now_ist_naive()
+
+    if vehicle.insurance_expiry_date and vehicle.insurance_expiry_date < now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Safety Block: Vehicle {vehicle.license_plate} cannot be dispatched because its Commercial Insurance EXPIRED on {vehicle.insurance_expiry_date.strftime('%d/%m/%Y')}!",
+        )
+
+    if vehicle.fitness_expiry_date and vehicle.fitness_expiry_date < now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Safety Block: Vehicle {vehicle.license_plate} cannot be dispatched because its Fitness Certificate EXPIRED on {vehicle.fitness_expiry_date.strftime('%d/%m/%Y')}!",
+        )
 
 
 @router.post("/", response_model=TripResponse)
@@ -367,6 +393,7 @@ def create_trip(
         vehicle = db.query(Vehicle).filter(Vehicle.id == trip.vehicle_id).first()
         if not vehicle:
             raise HTTPException(status_code=404, detail="Vehicle not found")
+        verify_vehicle_compliance(vehicle)
 
     db_trip = Trip(**trip_data)
     db.add(db_trip)
@@ -1360,6 +1387,18 @@ def submit_pre_trip_inspection(
             )
             db.add(m_log)
 
+            # Persist safety alert notification
+            from app.models.notification import Notification
+
+            notif = Notification(
+                title=f"⚠️ Safety Inspection Failed — Vehicle {vehicle.license_plate}",
+                message=f"Trip #{trip_id} safety check failed. Vehicle flagged for maintenance. Details: {inspection_in.notes or 'None'}",
+                severity="critical",
+                category="inspection",
+                link_id=str(trip_id),
+            )
+            db.add(notif)
+
     db.commit()
     db.refresh(inspection)
     return inspection
@@ -2136,4 +2175,94 @@ def smart_match_trip(
         "driver_id": best_driver.id,
         "driver_name": best_driver.name,
         "score": best_score,
+    }
+
+
+@router.post("/{trip_id}/simulate-route")
+def simulate_trip_route(
+    trip_id: int,
+    steps: int = Query(default=10, ge=3, le=50),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles("admin", "dispatcher")),
+):
+    """
+    Simulates real-time GPS telemetry movement along the geodesic path from
+    trip origin to trip destination. Triggers automated geofence evaluation rules,
+    status transitions (assigned -> at_origin -> started -> arrived -> detention),
+    notification logs, and WebSocket map updates.
+    """
+    from app.api.driver import evaluate_trip_geofences
+    from app.models.driver import Driver, DriverLocationHistory
+
+    trip = db.query(Trip).filter(Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(404, detail="Trip not found")
+
+    if not trip.driver_id:
+        available_driver = (
+            db.query(Driver).filter(Driver.status == "available").first()
+            or db.query(Driver).first()
+        )
+        if not available_driver:
+            raise HTTPException(
+                400, detail="No driver available in database to run route simulation"
+            )
+        trip.driver_id = available_driver.id
+        if trip.status == "created":
+            trip.status = "assigned"
+
+    driver = db.query(Driver).filter(Driver.id == trip.driver_id).first()
+    if not driver:
+        raise HTTPException(404, detail="Assigned driver not found")
+
+    src_lat = trip.source_latitude or 28.6139
+    src_lng = trip.source_longitude or 77.2090
+    dest_lat = trip.destination_latitude or 19.0760
+    dest_lng = trip.destination_longitude or 72.8777
+
+    if trip.source_latitude is None:
+        trip.source_latitude = src_lat
+        trip.source_longitude = src_lng
+    if trip.destination_latitude is None:
+        trip.destination_latitude = dest_lat
+        trip.destination_longitude = dest_lng
+
+    simulation_events = []
+
+    for i in range(steps):
+        t = i / float(steps - 1)
+        curr_lat = round(src_lat + t * (dest_lat - src_lat), 6)
+        curr_lng = round(src_lng + t * (dest_lng - src_lng), 6)
+
+        driver.current_latitude = curr_lat
+        driver.current_longitude = curr_lng
+        driver.last_location_update = get_now_ist_naive()
+
+        loc_entry = DriverLocationHistory(
+            driver_id=driver.id,
+            trip_id=trip.id,
+            latitude=curr_lat,
+            longitude=curr_lng,
+            recorded_at=get_now_ist_naive(),
+        )
+        db.add(loc_entry)
+
+        triggered = evaluate_trip_geofences(driver, curr_lat, curr_lng, db)
+        if triggered:
+            simulation_events.extend(triggered)
+
+    db.commit()
+    db.refresh(trip)
+
+    return {
+        "message": f"Route simulation completed successfully across {steps} telemetry waypoints.",
+        "trip_id": trip.id,
+        "final_status": trip.status,
+        "driver_id": driver.id,
+        "driver_name": driver.name,
+        "start_coords": [src_lat, src_lng],
+        "destination_coords": [dest_lat, dest_lng],
+        "final_coords": [driver.current_latitude, driver.current_longitude],
+        "geofence_events_triggered": simulation_events,
+        "detention_charge": trip.detention_charge,
     }

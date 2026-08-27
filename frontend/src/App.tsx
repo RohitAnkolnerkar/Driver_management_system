@@ -28,13 +28,28 @@ import {
   Printer,
   Download,
   Fuel,
-  CreditCard
+  CreditCard,
+  ShieldCheck,
+  Zap,
+  FileText,
+  Camera,
+  Upload
 } from 'lucide-react';
 
 import { ESGDashboardCard } from './components/ESGDashboardCard';
 import { FinanceDashboard } from './components/FinanceDashboard';
 import { ExpenseReimbursementCard } from './components/ExpenseReimbursementCard';
 import { FASTagDashboard } from './components/FASTagDashboard';
+import { DriverPayrollCenter } from './components/DriverPayrollCenter';
+import { FuelTheftDashboard } from './components/FuelTheftDashboard';
+import { VehicleServiceHistoryCard } from './components/VehicleServiceHistoryCard';
+import { ProofOfDeliveryModal } from './components/ProofOfDeliveryModal';
+import { VehicleTCODashboard } from './components/VehicleTCODashboard';
+import { PredictiveMaintenanceCard } from './components/PredictiveMaintenanceCard';
+import { VehicleTollAuditCard } from './components/VehicleTollAuditCard';
+import { DynamicPricingCalculator } from './components/DynamicPricingCalculator';
+import { IntelligentDispatchModal } from './components/IntelligentDispatchModal';
+import { TripInvoiceViewer } from './components/TripInvoiceViewer';
 
 // API Fetch helper that includes Auth token
 const apiFetch = async (url: string, options: RequestInit = {}) => {
@@ -130,13 +145,18 @@ export default function App() {
     phone: '',
     license_number: '',
     license_expiry: '',
-    enable_login: false,
+    account_mode: 'auto', // 'auto' | 'custom' | 'existing'
     username: '',
     password: '',
     email: '',
     base_salary: '0',
     commission_percentage: '100',
-    vehicle_id: ''
+    vehicle_id: '',
+    vehicle_type: 'cargo_truck',
+    odometer_km: '0',
+    status: 'available',
+    note: '',
+    user_id: ''
   });
   const [showDriverCredentials, setShowDriverCredentials] = useState<any>(null);
 
@@ -163,6 +183,8 @@ export default function App() {
   const [editDriverBaseSalary, setEditDriverBaseSalary] = useState('0');
   const [editDriverCommissionPercentage, setEditDriverCommissionPercentage] = useState('100');
   const [editDriverVehicleId, setEditDriverVehicleId] = useState('');
+  const [editDriverVehicleType, setEditDriverVehicleType] = useState('cargo_truck');
+  const [editDriverOdometerKm, setEditDriverOdometerKm] = useState('0');
   const [cancellingTripId, setCancellingTripId] = useState<number | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   // Arrival confirmation state
@@ -189,6 +211,7 @@ export default function App() {
 
   // Map Tracking States
   const [selectedMapTripId, setSelectedMapTripId] = useState<number | null>(null);
+  const [selectedPodTrip, setSelectedPodTrip] = useState<any | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(Date.now() / 1000);
 
   // Route Playback States
@@ -215,7 +238,58 @@ export default function App() {
   const [utilizationAnalytics, setUtilizationAnalytics] = useState<any[]>([]);
   const [utilizationPeriod, setUtilizationPeriod] = useState<number>(30);
   const [utilizationLoading, setUtilizationLoading] = useState<boolean>(false);
-  const [vehiclesSubTab, setVehiclesSubTab] = useState<'registry' | 'utilization'>('registry');
+  const [vehiclesSubTab, setVehiclesSubTab] = useState<'registry' | 'utilization' | 'maintenance' | 'tco'>('registry');
+  const [showPricingCalculator, setShowPricingCalculator] = useState(false);
+  const [activeDispatchTripId, setActiveDispatchTripId] = useState<number | null>(null);
+  const [activePodTripId, setActivePodTripId] = useState<number | null>(null);
+  const [activeInvoiceTripId, setActiveInvoiceTripId] = useState<number | null>(null);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [ocrLoading, setOcrLoading] = useState(false);
+
+  const loadNotifications = async () => {
+    try {
+      const data = await apiFetch('/notifications');
+      setNotifications(data);
+      setUnreadCount(data.filter((n: any) => !n.is_read).length);
+    } catch (err) {
+      console.error("Failed to load notifications", err);
+    }
+  };
+
+  const handleMarkRead = async (id: number) => {
+    try {
+      await apiFetch(`/notifications/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_read: true })
+      });
+      loadNotifications();
+    } catch (err) {
+      console.error("Failed to mark read", err);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      await apiFetch('/notifications/mark-all-read', {
+        method: 'POST'
+      });
+      loadNotifications();
+    } catch (err) {
+      console.error("Failed to mark all read", err);
+    }
+  };
+
+  const handleDeleteNotification = async (id: number) => {
+    try {
+      await apiFetch(`/notifications/${id}`, {
+        method: 'DELETE'
+      });
+      loadNotifications();
+    } catch (err) {
+      console.error("Failed to dismiss notification", err);
+    }
+  };
   const [dieselRates, setDieselRates] = useState<any>(null);
   const [selectedDieselCity, setSelectedDieselCity] = useState('Mumbai');
   const [dispatcherDieselCity, setDispatcherDieselCity] = useState('Mumbai');
@@ -225,13 +299,35 @@ export default function App() {
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [myVehicle, setMyVehicle] = useState<any | null>(null);
   const [showAddVehicle, setShowAddVehicle] = useState(false);
+  const [complianceAudit, setComplianceAudit] = useState<any>(null);
+
+  const fetchVehicles = async () => {
+    try {
+      const data = await apiFetch('/vehicles/');
+      setVehicles(data);
+      try {
+        const audit = await apiFetch('/vehicles/compliance-alerts');
+        setComplianceAudit(audit);
+      } catch (e) {
+        console.error('Failed to fetch compliance alerts', e);
+      }
+    } catch (err: any) {
+      showError(err.message);
+    }
+  };
   const [newVehicleData, setNewVehicleData] = useState({
     make: '',
     model: '',
     year: new Date().getFullYear().toString(),
     license_plate: '',
     odometer_km: '0',
-    status: 'active'
+    status: 'active',
+    vehicle_type: 'cargo_truck',
+    chassis_number: '',
+    engine_number: '',
+    insurance_expiry_date: '',
+    fitness_expiry_date: '',
+    puc_expiry_date: ''
   });
   const [editingVehicle, setEditingVehicle] = useState<any | null>(null);
   const [showLogMaintenance, setShowLogMaintenance] = useState<any | null>(null);
@@ -245,15 +341,6 @@ export default function App() {
   const [viewingMaintenanceLogs, setViewingMaintenanceLogs] = useState<any | null>(null);
   const [maintenanceHistory, setMaintenanceHistory] = useState<any[]>([]);
 
-  const fetchVehicles = async () => {
-    try {
-      const data = await apiFetch('/vehicles/');
-      setVehicles(data);
-    } catch (err: any) {
-      showError(err.message);
-    }
-  };
-
   const handleCreateVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -265,7 +352,13 @@ export default function App() {
           year: parseInt(newVehicleData.year),
           license_plate: newVehicleData.license_plate,
           odometer_km: parseFloat(newVehicleData.odometer_km),
-          status: newVehicleData.status
+          status: newVehicleData.status,
+          vehicle_type: newVehicleData.vehicle_type,
+          chassis_number: newVehicleData.chassis_number || null,
+          engine_number: newVehicleData.engine_number || null,
+          insurance_expiry_date: newVehicleData.insurance_expiry_date ? new Date(newVehicleData.insurance_expiry_date).toISOString() : null,
+          fitness_expiry_date: newVehicleData.fitness_expiry_date ? new Date(newVehicleData.fitness_expiry_date).toISOString() : null,
+          puc_expiry_date: newVehicleData.puc_expiry_date ? new Date(newVehicleData.puc_expiry_date).toISOString() : null
         })
       });
       showSuccess("Vehicle created successfully!");
@@ -276,7 +369,13 @@ export default function App() {
         year: new Date().getFullYear().toString(),
         license_plate: '',
         odometer_km: '0',
-        status: 'active'
+        status: 'active',
+        vehicle_type: 'cargo_truck',
+        chassis_number: '',
+        engine_number: '',
+        insurance_expiry_date: '',
+        fitness_expiry_date: '',
+        puc_expiry_date: ''
       });
       fetchVehicles();
       loadData();
@@ -625,6 +724,105 @@ export default function App() {
       }
     } catch (err: any) {
       showError(err.message);
+    }
+  };
+
+  const handleReceiptOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setOcrLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const token = localStorage.getItem('token');
+      const response = await fetch('/fuel/receipt/ocr', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to parse receipt OCR.");
+      }
+      
+      const result = await response.json();
+      
+      showSuccess(`Receipt scanned! Extracted: ${result.station_name}, ${result.liters}L, total ₹${result.total_amount} (${Math.round(result.confidence * 100)}% confidence).`);
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  const handleVehicleDocumentOCRUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    setOcrLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://127.0.0.1:8000/vehicles/document/ocr', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.detail || 'Vehicle document OCR scan failed');
+      }
+
+      const result = await res.json();
+      setNewVehicleData(prev => ({
+        ...prev,
+        make: result.make || prev.make,
+        model: result.model || prev.model,
+        year: result.year ? result.year.toString() : prev.year,
+        license_plate: result.license_plate || prev.license_plate,
+        chassis_number: result.chassis_number || prev.chassis_number,
+        engine_number: result.engine_number || prev.engine_number,
+        insurance_expiry_date: result.insurance_expiry_date || prev.insurance_expiry_date,
+        fitness_expiry_date: result.fitness_expiry_date || prev.fitness_expiry_date,
+        puc_expiry_date: result.puc_expiry_date || prev.puc_expiry_date
+      }));
+
+      showSuccess(`Vehicle RC scanned! Extracted: ${result.license_plate || 'Document'}, ${result.make} ${result.model} (${Math.round(result.confidence * 100)}% confidence).`);
+    } catch (err: any) {
+      showError(err.message);
+    } finally {
+      setOcrLoading(false);
+    }
+  };
+
+  const handleSimulateRoute = async (tripId: number) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://127.0.0.1:8000/trips/${tripId}/simulate-route?steps=15`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        showSuccess(`Route simulation finished! Status: ${data.final_status}. ${data.geofence_events_triggered.length} geofence events triggered.`);
+        loadData();
+      } else {
+        const err = await response.json();
+        showError(err.detail || 'Failed to simulate route');
+      }
+    } catch (e: any) {
+      showError(e.message || 'Error connecting to route simulation API');
     }
   };
 
@@ -1085,6 +1283,7 @@ export default function App() {
 
   const loadData = async () => {
     try {
+      loadNotifications();
       if (currentUser.role === 'admin' || currentUser.role === 'dispatcher') {
         // Fetch stats
         const stats = await apiFetch('/drivers/dashboard/summary');
@@ -1373,7 +1572,9 @@ export default function App() {
           note: driverStatusNote || undefined,
           base_salary: parseFloat(editDriverBaseSalary || '0'),
           commission_percentage: parseFloat(editDriverCommissionPercentage || '100'),
-          vehicle_id: editDriverVehicleId ? parseInt(editDriverVehicleId) : null
+          vehicle_id: editDriverVehicleId ? parseInt(editDriverVehicleId) : null,
+          vehicle_type: editDriverVehicleType || 'cargo_truck',
+          odometer_km: parseFloat(editDriverOdometerKm || '0')
         })
       });
       showSuccess("Driver profile updated successfully!");
@@ -1386,6 +1587,8 @@ export default function App() {
       setEditDriverBaseSalary('0');
       setEditDriverCommissionPercentage('100');
       setEditDriverVehicleId('');
+      setEditDriverVehicleType('cargo_truck');
+      setEditDriverOdometerKm('0');
       loadData();
     } catch (e: any) {
       setEditDriverError(e.message);
@@ -1463,16 +1666,25 @@ export default function App() {
         license_expiry: newDriverData.license_expiry ? new Date(newDriverData.license_expiry).toISOString() : undefined,
         base_salary: parseFloat(newDriverData.base_salary || '0'),
         commission_percentage: parseFloat(newDriverData.commission_percentage || '100'),
-        vehicle_id: newDriverData.vehicle_id ? parseInt(newDriverData.vehicle_id) : null
+        vehicle_id: newDriverData.vehicle_id ? parseInt(newDriverData.vehicle_id) : null,
+        vehicle_type: newDriverData.vehicle_type || 'cargo_truck',
+        odometer_km: parseFloat(newDriverData.odometer_km || '0'),
+        status: newDriverData.status || 'available',
+        note: newDriverData.note || undefined
       };
 
-      if (newDriverData.enable_login) {
+      if (newDriverData.account_mode === 'custom') {
         if (!newDriverData.username || !newDriverData.password) {
-          throw new Error("Username and Password are required if login is enabled");
+          throw new Error("Username and Password are required if custom login is enabled");
         }
         payload.username = newDriverData.username;
         payload.password = newDriverData.password;
         if (newDriverData.email) payload.email = newDriverData.email;
+      } else if (newDriverData.account_mode === 'existing') {
+        if (!newDriverData.user_id) {
+          throw new Error("User ID is required when linking to an existing user");
+        }
+        payload.user_id = parseInt(newDriverData.user_id);
       }
 
       const res = await apiFetch('/drivers/', {
@@ -1497,13 +1709,18 @@ export default function App() {
         phone: '',
         license_number: '',
         license_expiry: '',
-        enable_login: false,
+        account_mode: 'auto',
         username: '',
         password: '',
         email: '',
         base_salary: '0',
         commission_percentage: '100',
-        vehicle_id: ''
+        vehicle_id: '',
+        vehicle_type: 'cargo_truck',
+        odometer_km: '0',
+        status: 'available',
+        note: '',
+        user_id: ''
       });
       loadData();
     } catch (e: any) {
@@ -1905,7 +2122,7 @@ export default function App() {
                     onClick={() => setActiveTab('alerts')}
                   >
                     <AlertTriangle size={18} />
-                    Alerts {alerts.length > 0 && <span style={{ backgroundColor: 'var(--accent-red)', color: '#fff', borderRadius: '50%', width: '18px', height: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', marginLeft: 'auto', fontWeight: 'bold' }}>{alerts.length}</span>}
+                    Alerts {(alerts.length + unreadCount) > 0 && <span style={{ backgroundColor: 'var(--accent-red)', color: '#fff', borderRadius: '50%', width: '18px', height: '18px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', marginLeft: 'auto', fontWeight: 'bold' }}>{alerts.length + unreadCount}</span>}
                   </div>
                 </li>
                 <li>
@@ -2281,12 +2498,12 @@ export default function App() {
                                   </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
-                                  <button onClick={() => handleAutoAssign(trip.id)} className="btn btn-primary btn-sm" style={{ padding: '6px 12px', gap: '4px' }}>
-                                    <ListRestart size={12} />
-                                    Auto
+                                  <button onClick={() => setActiveDispatchTripId(trip.id)} className="btn btn-primary btn-sm" style={{ padding: '6px 12px', gap: '4px' }}>
+                                    <Zap size={12} />
+                                    ⚡ Match
                                   </button>
                                   <button onClick={() => setAssigningTripId(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '6px 12px' }}>
-                                    Manual
+                                    Manual Override
                                   </button>
                                 </div>
                               </div>
@@ -2343,7 +2560,13 @@ export default function App() {
                                       </td>
                                       <td>
                                         <div style={{ fontSize: '12px' }}>{trip.cargo_weight_kg ? `${trip.cargo_weight_kg.toLocaleString()} kg` : 'N/A'}</div>
-                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{trip.cargo_volume_m3 ? `${trip.cargo_volume_m3} m³` : ''}</div>
+                                        <button
+                                          onClick={() => setSelectedPodTrip(trip)}
+                                          className="btn btn-sm"
+                                          style={{ marginTop: '4px', padding: '2px 8px', fontSize: '10.5px', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '4px', cursor: 'pointer' }}
+                                        >
+                                          ✍️ e-POD
+                                        </button>
                                       </td>
                                     </tr>
                                   );
@@ -2402,6 +2625,31 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Vehicle Compliance Paper Alerts */}
+                        {complianceAudit && complianceAudit.alerts && complianceAudit.alerts.length > 0 && (
+                          <div style={{ marginTop: '16px', borderTop: '1px dashed rgba(255,255,255,0.08)', paddingTop: '12px' }}>
+                            <div style={{ fontWeight: 600, fontSize: '12.5px', color: 'var(--accent-amber)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <FileText size={14} />
+                              Vehicle Paper Expiry Audits ({complianceAudit.alerts.length})
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              {complianceAudit.alerts.slice(0, 4).map((item: any) => (
+                                <div key={item.vehicle_id} style={{ backgroundColor: 'rgba(239, 68, 68, 0.06)', padding: '10px 12px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                                  <div style={{ fontWeight: 600, color: '#fff', fontSize: '12.5px', display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>🚗 {item.license_plate}</span>
+                                    <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>{item.make} {item.model}</span>
+                                  </div>
+                                  {item.issues.map((iss: any, idx: number) => (
+                                    <div key={idx} style={{ fontSize: '11px', color: iss.severity === 'critical' ? 'var(--accent-red)' : 'var(--accent-amber)', marginTop: '4px', fontWeight: 500 }}>
+                                      • {iss.message}
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {alerts.length > 0 && (
                           <button onClick={() => setActiveTab('alerts')} className="btn btn-secondary btn-sm" style={{ width: '100%', marginTop: '16px', justifyContent: 'center', fontSize: '11.5px' }}>
                             View All Warnings
@@ -2420,57 +2668,149 @@ export default function App() {
 
             {/* TAB 2: ALERTS (ADMIN & DISPATCHER ONLY) */}
             {activeTab === 'alerts' && isDispatcher && (
-              <div className="content-panel">
-                <div className="alerts-banner">
-                  <AlertTriangle size={24} color="var(--accent-amber)" />
-                  <div>
-                    <h3 style={{ fontWeight: 600, color: '#fff', fontSize: '15px' }}>License Expired or Expiring Within 30 Days</h3>
-                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      Assignments are blocked for drivers whose licenses have passed their expiration date. Please update their credentials.
-                    </p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+                
+                {/* Left Column: License Compliance */}
+                <div className="content-panel" style={{ margin: 0 }}>
+                  <div className="panel-header">
+                    <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertTriangle size={18} color="var(--accent-amber)" />
+                      Registry Compliance Warnings
+                    </h3>
+                  </div>
+                  <div className="alerts-banner" style={{ margin: '12px 0 20px 0' }}>
+                    <AlertTriangle size={24} color="var(--accent-amber)" />
+                    <div>
+                      <h4 style={{ fontWeight: 600, color: '#fff', fontSize: '13px', margin: 0 }}>License Expiring Within 30 Days</h4>
+                      <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
+                        Assignments are blocked for drivers whose licenses have expired. Please update their profile credentials.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="table-container">
+                    <table className="dashboard-table">
+                      <thead>
+                        <tr>
+                          <th>Driver Name</th>
+                          <th>Phone</th>
+                          <th>Expiration Date</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {alerts.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
+                              No license warnings. All driver credentials active!
+                            </td>
+                          </tr>
+                        ) : (
+                          alerts.map(driver => {
+                            const expired = new Date(driver.license_expiry) < new Date();
+                            return (
+                              <tr key={driver.id}>
+                                <td style={{ fontWeight: 600, color: '#fff' }}>{driver.name}</td>
+                                <td>{driver.phone}</td>
+                                <td>{new Date(driver.license_expiry).toLocaleDateString()}</td>
+                                <td>
+                                  <span className={`expiry-indicator ${expired ? 'expiry-red' : 'expiry-amber'}`} style={{ display: 'inline-flex', fontSize: '10px', padding: '2px 6px' }}>
+                                    {expired ? 'Expired' : 'Soon'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 
-                <div className="table-container">
-                  <table className="dashboard-table">
-                    <thead>
-                      <tr>
-                        <th>Driver Name</th>
-                        <th>Phone Number</th>
-                        <th>License Number</th>
-                        <th>Expiration Date</th>
-                        <th>Alert Severity</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {alerts.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px' }}>
-                            No license warnings. All driver credentials active!
-                          </td>
-                        </tr>
-                      ) : (
-                        alerts.map(driver => {
-                          const expired = new Date(driver.license_expiry) < new Date();
-                          return (
-                            <tr key={driver.id}>
-                              <td style={{ fontWeight: 600, color: '#fff' }}>{driver.name}</td>
-                              <td>{driver.phone}</td>
-                              <td><code>{driver.license_number || 'N/A'}</code></td>
-                              <td>{new Date(driver.license_expiry).toLocaleDateString()}</td>
-                              <td>
-                                <span className={`expiry-indicator ${expired ? 'expiry-red' : 'expiry-amber'}`} style={{ display: 'inline-flex' }}>
-                                  <AlertTriangle size={12} />
-                                  {expired ? 'Critical: Expired' : 'Warning: Expiring'}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
+                {/* Right Column: Persisted Notifications & Alert Radar */}
+                <div className="content-panel" style={{ margin: 0, display: 'flex', flexDirection: 'column' }}>
+                  <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 style={{ fontSize: '15px', fontWeight: 600, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Zap size={18} color="var(--accent-cyan)" />
+                      System Operations Feed
+                    </h3>
+                    {unreadCount > 0 && (
+                      <button onClick={handleMarkAllRead} className="btn btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: '11px' }}>
+                        Mark All Read
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px', overflowY: 'auto', maxHeight: '450px' }}>
+                    {notifications.length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--text-secondary)' }}>
+                        <Shield size={32} style={{ opacity: 0.2, marginBottom: '12px' }} />
+                        <p style={{ fontSize: '12px' }}>Operational logs clear. No recent alerts dispatched.</p>
+                      </div>
+                    ) : (
+                      notifications.map(notif => {
+                        let severityColor = 'rgba(255,255,255,0.02)';
+                        let borderColor = 'var(--border-light)';
+                        if (notif.severity === 'critical') {
+                          severityColor = 'rgba(239,68,68,0.03)';
+                          borderColor = 'rgba(239,68,68,0.2)';
+                        } else if (notif.severity === 'warning') {
+                          severityColor = 'rgba(245,158,11,0.03)';
+                          borderColor = 'rgba(245,158,11,0.2)';
+                        }
+
+                        return (
+                          <div
+                            key={notif.id}
+                            style={{
+                              padding: '14px',
+                              borderRadius: '8px',
+                              backgroundColor: severityColor,
+                              border: `1px solid ${borderColor}`,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '6px',
+                              position: 'relative',
+                              opacity: notif.is_read ? 0.6 : 1
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div style={{ fontSize: '13.5px', fontWeight: 700, color: notif.is_read ? 'var(--text-secondary)' : '#fff' }}>
+                                {notif.title}
+                              </div>
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                {!notif.is_read && (
+                                  <button
+                                    onClick={() => handleMarkRead(notif.id)}
+                                    title="Mark as Read"
+                                    style={{ background: 'none', border: 'none', color: 'var(--accent-green)', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+                                  >
+                                    ✓
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleDeleteNotification(notif.id)}
+                                  title="Dismiss Alert"
+                                  style={{ background: 'none', border: 'none', color: 'var(--accent-red)', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                              {notif.message}
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10.5px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                              <span>Category: <strong style={{ color: 'var(--accent-cyan)' }}>{notif.category.toUpperCase()}</strong></span>
+                              <span>{new Date(notif.created_at).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
+
               </div>
             )}
 
@@ -2508,6 +2848,10 @@ export default function App() {
                             <td>
                               <div style={{ fontWeight: 600, color: '#fff' }}>{driver.name}</div>
                               <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>ID: {driver.id} | Phone: {driver.phone}</div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                Vehicle Spec: <span style={{ textTransform: 'capitalize', color: 'var(--accent-cyan)' }}>{(driver.vehicle_type || 'cargo_truck').replace('_', ' ')}</span> | Odo: {driver.odometer_km || 0} km
+                                {driver.vehicle_id ? ` | Vehicle ID: ${driver.vehicle_id}` : ''}
+                              </div>
                             </td>
                             <td>
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -2549,6 +2893,9 @@ export default function App() {
                                   setEditDriverExpiry(driver.license_expiry ? driver.license_expiry.split('T')[0] : '');
                                   setEditDriverBaseSalary(driver.base_salary !== undefined ? driver.base_salary.toString() : '0');
                                   setEditDriverCommissionPercentage(driver.commission_percentage !== undefined ? driver.commission_percentage.toString() : '100');
+                                  setEditDriverVehicleId(driver.vehicle_id ? driver.vehicle_id.toString() : '');
+                                  setEditDriverVehicleType(driver.vehicle_type || 'cargo_truck');
+                                  setEditDriverOdometerKm(driver.odometer_km !== undefined ? driver.odometer_km.toString() : '0');
                                 }} className="btn btn-secondary btn-icon-only" title="Edit Profile & Status">
                                   <Edit size={14} />
                                 </button>
@@ -2629,6 +2976,20 @@ export default function App() {
                     style={{ fontSize: '13px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
                     📊 Fleet Downtime & Utilization Dashboard
+                  </button>
+                  <button
+                    onClick={() => setVehiclesSubTab('maintenance')}
+                    className={`btn ${vehiclesSubTab === 'maintenance' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '13px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    🛠️ Maintenance & Telemetry
+                  </button>
+                  <button
+                    onClick={() => setVehiclesSubTab('tco')}
+                    className={`btn ${vehiclesSubTab === 'tco' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '13px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    💰 TCO Profitability Analyzer
                   </button>
                 </div>
 
@@ -2979,6 +3340,15 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                {vehiclesSubTab === 'maintenance' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <PredictiveMaintenanceCard token={token} />
+                    <VehicleServiceHistoryCard token={token} apiFetch={apiFetch} />
+                  </div>
+                )}
+                {vehiclesSubTab === 'tco' && (
+                  <VehicleTCODashboard token={token} />
+                )}
               </div>
             )}
 
@@ -2991,10 +3361,15 @@ export default function App() {
                     Dispatch Trip Manifest
                   </h2>
                   {isDispatcher && (
-                    <button onClick={() => setShowCreateTrip(true)} className="btn btn-primary btn-sm">
-                      <Plus size={16} />
-                      Schedule New Trip
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button onClick={() => setShowPricingCalculator(true)} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <TrendingUp size={14} /> Pricing Advisor
+                      </button>
+                      <button onClick={() => setShowCreateTrip(true)} className="btn btn-primary btn-sm">
+                        <Plus size={16} />
+                        Schedule New Trip
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -3226,15 +3601,26 @@ export default function App() {
                                   </>
                                 )}
                                 {trip.status === 'started' && (isDispatcher || (isDriver && myDriverProfile?.id === trip.driver_id)) && (
-                                  <button onClick={() => setTransitioningTrip({ id: trip.id, action: 'complete' })} className="btn btn-primary btn-sm" style={{ padding: '3px 8px', fontSize: '10px' }}>
-                                    <CheckCircle2 size={10} />
-                                    Complete
+                                  <button onClick={() => setActivePodTripId(trip.id)} className="btn btn-primary btn-sm" style={{ padding: '3px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <ShieldCheck size={10} />
+                                    Verify Delivery
                                   </button>
                                 )}
                                 {(trip.status === 'created' || trip.status === 'assigned') && isDispatcher && (
                                   <button onClick={() => setCancellingTripId(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '3px 8px', fontSize: '10px', color: 'var(--accent-red)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
                                     <XCircle size={10} />
                                     Cancel Trip
+                                  </button>
+                                )}
+                                {isDispatcher && trip.status !== 'completed' && trip.status !== 'cancelled' && (
+                                  <button
+                                    onClick={() => handleSimulateRoute(trip.id)}
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: 'rgba(59, 130, 246, 0.15)', color: 'var(--accent-cyan)', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}
+                                    title="Simulate real-time GPS route telemetry and test automated geofence transitions"
+                                  >
+                                    <Compass size={10} />
+                                    Simulate GPS Route
                                   </button>
                                 )}
                               </div>
@@ -3259,6 +3645,12 @@ export default function App() {
                                     Playback
                                   </button>
                                 )}
+                                {trip.status === 'completed' && (
+                                  <button onClick={() => setActiveInvoiceTripId(trip.id)} className="btn btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }} title="View Trip Invoice">
+                                    <FileText size={12} color="var(--accent-cyan)" />
+                                    Invoice
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -3279,7 +3671,7 @@ export default function App() {
                     Driver Performance Leaderboard
                   </h2>
                   <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                    Ranked by total earnings — all completed trips
+                    Ranked by total trip revenue generated — all completed trips
                   </span>
                 </div>
 
@@ -3297,7 +3689,7 @@ export default function App() {
                         className={`btn ${performanceSubTab === 'leaderboard' ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 16px' }}
                       >
-                        🏆 Earnings Leaderboard
+                        🏆 Revenue Leaderboard
                       </button>
                       <button
                         onClick={() => setPerformanceSubTab('analytics')}
@@ -3360,7 +3752,7 @@ export default function App() {
                                     <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--accent-cyan)' }}>{driver.completed_trips}</div>
                                   </div>
                                   <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '8px', padding: '10px' }}>
-                                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '2px' }}>EARNINGS</div>
+                                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '2px' }}>TRIP REVENUE</div>
                                     <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent-green)' }}>₹{driver.total_earnings.toFixed(0)}</div>
                                   </div>
                                   <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '8px', padding: '10px', gridColumn: '1 / -1' }}>
@@ -3387,9 +3779,9 @@ export default function App() {
                                     <th>Rank</th>
                                     <th>Driver</th>
                                     <th>Trips Completed</th>
-                                    <th>Total Earnings</th>
+                                    <th>Total Revenue</th>
                                     <th>Avg Fare / Trip</th>
-                                    <th>Earnings Bar</th>
+                                    <th>Revenue Bar</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -3618,7 +4010,7 @@ export default function App() {
                                       { label: 'Fatigue Incidents', value: sc.fatigue_incidents, color: sc.fatigue_incidents === 0 ? '#22c55e' : sc.fatigue_incidents <= 2 ? 'var(--accent-amber)' : 'var(--accent-red)', icon: '😴' },
                                       { label: 'Trips Completed', value: sc.completed_trips, color: 'var(--accent-cyan)', icon: '🚗' },
                                       { label: 'Flagged Trips', value: sc.flagged_trips, color: sc.flagged_trips === 0 ? '#22c55e' : 'var(--accent-red)', icon: '🚩' },
-                                      { label: 'Total Earnings', value: `₹${sc.total_earnings.toLocaleString('en-IN', {maximumFractionDigits: 0})}`, color: 'var(--accent-green)', icon: '💰' },
+                                      { label: 'Gross Revenue Generated', value: `₹${sc.total_earnings.toLocaleString('en-IN', {maximumFractionDigits: 0})}`, color: 'var(--accent-green)', icon: '💰' },
                                       { label: 'Distance Covered', value: `${sc.total_distance_km.toFixed(1)} km`, color: 'var(--accent-amber)', icon: '🛣️' },
                                     ].map(kpi => (
                                       <div key={kpi.label} style={{ background: 'var(--surface-1)', padding: '14px 16px' }}>
@@ -3658,7 +4050,7 @@ export default function App() {
                         { label: 'Total Fleet Distance', value: `${leaderboard.reduce((s: number, d: any) => s + (d.total_distance_km || 0), 0).toFixed(1)} km`, color: 'var(--accent-amber)', icon: '🛣️' },
                         { label: 'Fleet Avg Speed', value: `${(leaderboard.length ? (leaderboard.reduce((s: number, d: any) => s + (d.average_speed_kmh || 0), 0) / leaderboard.length) : 0).toFixed(1)} km/h`, color: 'var(--accent-cyan)', icon: '⚡' },
                         { label: 'Fleet Safety Score', value: `${(leaderboard.length ? (leaderboard.reduce((s: number, d: any) => s + (d.on_time_rate || 100), 0) / leaderboard.length) : 100).toFixed(1)}%`, color: 'var(--accent-green)', icon: '🛡️' },
-                        { label: 'Total Fleet Earnings', value: `₹${leaderboard.reduce((s: number, d: any) => s + d.total_earnings, 0).toFixed(0)}`, color: 'var(--accent-green)', icon: '💰' },
+                        { label: 'Total Fleet Revenue', value: `₹${leaderboard.reduce((s: number, d: any) => s + d.total_earnings, 0).toFixed(0)}`, color: 'var(--accent-green)', icon: '💰' },
                       ].map(stat => (
                         <div key={stat.label} className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
                           <div style={{ fontSize: '18px' }}>{stat.icon}</div>
@@ -4309,9 +4701,22 @@ export default function App() {
                         </label>
                       </div>
 
-                      <button type="submit" className="btn btn-primary" style={{ marginTop: '8px', alignSelf: 'flex-end', height: '36px', padding: '0 16px', fontSize: '13px' }}>
-                        Submit Refueling Log
-                      </button>
+                      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px', alignSelf: 'flex-end' }}>
+                        <label className="btn btn-secondary" style={{ height: '36px', padding: '0 16px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                          <Camera size={15} />
+                          {ocrLoading ? 'Scanning...' : 'Scan Receipt (OCR)'}
+                          <input
+                            type="file"
+                            accept="image/*,application/pdf"
+                            style={{ display: 'none' }}
+                            onChange={handleReceiptOCRUpload}
+                            disabled={ocrLoading}
+                          />
+                        </label>
+                        <button type="submit" className="btn btn-primary" style={{ height: '36px', padding: '0 16px', fontSize: '13px' }}>
+                          Submit Refueling Log
+                        </button>
+                      </div>
                     </form>
                   </div>
                 </div>
@@ -4586,6 +4991,11 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Predictive Fuel Theft Radar */}
+                <div style={{ marginTop: '24px' }}>
+                  <FuelTheftDashboard apiFetch={apiFetch} />
+                </div>
+
               </div>
             )}
 
@@ -4628,7 +5038,7 @@ export default function App() {
 
                       <div className="metric-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}>
                         <div style={{ fontSize: '20px' }}>💸</div>
-                        <div className="metric-label">Released Earnings</div>
+                        <div className="metric-label">Released Payouts</div>
                         <div className="metric-value" style={{ color: 'var(--accent-green)', fontSize: '22px' }}>
                           {releasedTrips.length}
                         </div>
@@ -4751,202 +5161,17 @@ export default function App() {
 
             {/* TAB: PAYMENTS */}
             {activeTab === 'payments' && (
+              isDispatcher ? (
+                <DriverPayrollCenter token={token} apiFetch={apiFetch} />
+              ) : (
+                <div className="content-panel">
+                  <div className="panel-header">
+                    <h2 className="panel-title">
+                      <TrendingUp size={20} color="var(--accent-cyan)" />
+                      My Earnings & Payouts History
+                    </h2>
+                  </div>
 
-              <div className="content-panel">
-                <div className="panel-header">
-                  <h2 className="panel-title">
-                    <TrendingUp size={20} color="var(--accent-cyan)" />
-                    {isDispatcher ? "Monthly Driver Payouts Manager" : "My Earnings & Payouts History"}
-                  </h2>
-                  {isDispatcher && (
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                      Configure, calculate, and issue monthly payouts
-                    </span>
-                  )}
-                </div>
-
-                {isDispatcher ? (
-                  <>
-                    {/* GENERATE PAYOUT PANEL */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px', backgroundColor: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '12px', marginBottom: '24px', border: '1px solid var(--border-color)' }}>
-                      <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Generate New Monthly Payout Draft</h3>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end' }}>
-                        <div className="form-group" style={{ margin: 0, minWidth: '200px' }}>
-                          <label className="form-label">Driver</label>
-                          <select
-                            className="form-select"
-                            value={paymentsFilterDriver}
-                            onChange={e => setPaymentsFilterDriver(e.target.value)}
-                          >
-                            <option value="">-- Select Driver --</option>
-                            {drivers.map(d => (
-                              <option key={d.id} value={d.id}>{d.name} ({d.phone})</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="form-group" style={{ margin: 0, width: '100px' }}>
-                          <label className="form-label">Year</label>
-                          <select
-                            className="form-select"
-                            value={paymentsFilterYear}
-                            onChange={e => setPaymentsFilterYear(e.target.value)}
-                          >
-                            <option value="2026">2026</option>
-                            <option value="2027">2027</option>
-                          </select>
-                        </div>
-                        <div className="form-group" style={{ margin: 0, width: '120px' }}>
-                          <label className="form-label">Month</label>
-                          <select
-                            className="form-select"
-                            value={paymentsFilterMonth}
-                            onChange={e => setPaymentsFilterMonth(e.target.value)}
-                          >
-                            {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
-                              <option key={m} value={m}>{new Date(2020, m - 1).toLocaleString('default', { month: 'long' })}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (!paymentsFilterDriver) {
-                              alert("Please select a driver first!");
-                              return;
-                            }
-                            handleGeneratePayout(
-                              parseInt(paymentsFilterDriver),
-                              parseInt(paymentsFilterYear),
-                              parseInt(paymentsFilterMonth)
-                            );
-                          }}
-                          className="btn btn-primary"
-                          disabled={generatingPayout || !paymentsFilterDriver}
-                        >
-                          {generatingPayout ? "Calculating..." : "Generate Payout Draft"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* PAYMENTS FILTER TOOLBAR */}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', backgroundColor: 'rgba(255,255,255,0.01)', padding: '16px', borderRadius: '8px', marginBottom: '20px', border: '1px solid var(--border-color)', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Filter size={14} color="var(--text-secondary)" />
-                        <span style={{ fontSize: '13px', fontWeight: 600 }}>Filters:</span>
-                      </div>
-
-                      <div className="form-group" style={{ margin: 0, width: '140px' }}>
-                        <select
-                          className="form-select font-sm"
-                          value={paymentsFilterStatus}
-                          onChange={e => setPaymentsFilterStatus(e.target.value)}
-                        >
-                          <option value="">All Statuses</option>
-                          <option value="pending">Pending</option>
-                          <option value="paid">Paid</option>
-                        </select>
-                      </div>
-                      <button onClick={handleExportCSV} className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto', marginRight: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Printer size={14} /> Export CSV Reports
-                      </button>
-                      <button onClick={loadData} className="btn btn-secondary btn-sm">
-                        <RefreshCw size={14} /> Refresh Data
-                      </button>
-                    </div>
-
-                    {/* PAYMENTS TABLE */}
-                    <div className="table-container">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>Driver Name</th>
-                            <th>Period</th>
-                            <th>Base Salary</th>
-                            <th>Commission</th>
-                            <th>Bonus</th>
-                            <th>Deductions</th>
-                            <th>Total Payout</th>
-                            <th>Status</th>
-                            <th>Processed At</th>
-                            <th>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {payments.length === 0 ? (
-                            <tr>
-                              <td colSpan={10} style={{ textAlign: 'center', padding: '32px', color: 'var(--text-secondary)' }}>
-                                No payment records found for the selected filters.
-                              </td>
-                            </tr>
-                          ) : (
-                            payments.map(p => {
-                              const driverObj = drivers.find(d => d.id === p.driver_id);
-                              return (
-                                <tr key={p.id}>
-                                  <td style={{ fontWeight: 600 }}>{driverObj ? driverObj.name : `Driver ID: ${p.driver_id}`}</td>
-                                  <td>{new Date(2020, p.month - 1).toLocaleString('default', { month: 'short' })} {p.year}</td>
-                                  <td>₹{parseFloat(p.base_salary_paid).toFixed(2)}</td>
-                                  <td>₹{parseFloat(p.commission_paid).toFixed(2)}</td>
-                                  <td>₹{parseFloat(p.bonus).toFixed(2)}</td>
-                                  <td>₹{parseFloat(p.deductions).toFixed(2)}</td>
-                                  <td style={{ fontWeight: 700, color: 'var(--accent-green)' }}>₹{parseFloat(p.total_paid).toFixed(2)}</td>
-                                  <td>
-                                    <span className={`badge badge-${p.status === 'paid' ? 'completed' : 'assigned'}`}>
-                                      {p.status}
-                                    </span>
-                                  </td>
-                                  <td>{p.paid_at ? new Date(p.paid_at).toLocaleString() : '—'}</td>
-                                  <td>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                      {p.status === 'pending' ? (
-                                        <>
-                                          <button
-                                            onClick={() => {
-                                              setShowPayModal(p);
-                                              setPayoutBonus(p.bonus.toString());
-                                              setPayoutDeductions(p.deductions.toString());
-                                              setPayoutMethod('Bank Transfer');
-                                              setPayoutNote(p.note || '');
-                                            }}
-                                            className="btn btn-primary btn-sm"
-                                            style={{ padding: '4px 8px', fontSize: '11px' }}
-                                          >
-                                            Settle/Pay
-                                          </button>
-                                          {currentUser.role === 'admin' && (
-                                            <button
-                                              onClick={() => handleDeletePayment(p.id)}
-                                              className="btn btn-secondary btn-sm"
-                                              style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--accent-red)' }}
-                                            >
-                                              Delete
-                                            </button>
-                                          )}
-                                        </>
-                                      ) : (
-                                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                                          Paid via {p.payment_method || 'UPI'}
-                                        </span>
-                                      )}
-                                      <button
-                                        onClick={() => handleDownloadInvoice(p.id)}
-                                        className="btn btn-secondary btn-sm"
-                                        style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                                        title="Download Invoice PDF"
-                                      >
-                                        <Printer size={12} /> Paystub
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                ) : (
-                  /* DRIVER VIEW */
                   <div className="table-container">
                     <table className="data-table">
                       <thead>
@@ -5004,9 +5229,10 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
-                )}
-              </div>
+                </div>
+              )
             )}
+
             {activeTab === 'finance' && token && (
               <FinanceDashboard token={token} />
             )}
@@ -5018,7 +5244,10 @@ export default function App() {
             )}
 
             {activeTab === 'fasttag' && token && (
-              <FASTagDashboard apiFetch={apiFetch} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <FASTagDashboard apiFetch={apiFetch} />
+                <VehicleTollAuditCard apiFetch={apiFetch} />
+              </div>
             )}
 
             {/* TAB: LIVE MAP */}
@@ -5327,6 +5556,85 @@ export default function App() {
 
           </div>
         </div>
+
+        {/* MODAL: DYNAMIC PRICING ADVISOR */}
+        {showPricingCalculator && (
+          <div className="modal-overlay">
+            <div className="modal-content" style={{ width: '700px', maxHeight: '90vh', overflowY: 'auto', padding: '24px' }}>
+              <div className="modal-header" style={{ marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#fff', margin: 0 }}>📊 Dynamic Pricing & Tariff Advisor</h3>
+                <button type="button" className="modal-close" onClick={() => setShowPricingCalculator(false)}>
+                  <X size={20} />
+                </button>
+              </div>
+              <DynamicPricingCalculator
+                apiFetch={apiFetch}
+                onApplyQuote={(fare, details) => {
+                  const estimatedDuration = Math.round((details.distance_km / 50) * 60); // 50 km/h avg
+                  setNewTripData({
+                    ...newTripData,
+                    source: details.source,
+                    destination: details.destination,
+                    distance_km: details.distance_km.toString(),
+                    duration_minutes: estimatedDuration.toString(),
+                    estimated_fare: fare.toString(),
+                    source_company: '',
+                    destination_company: '',
+                    is_regular: false,
+                    scheduled_date: new Date().toISOString().split('T')[0],
+                    priority: 'normal'
+                  });
+                  setShowPricingCalculator(false);
+                  setShowCreateTrip(true);
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {activeDispatchTripId !== null && (() => {
+          const trip = trips.find(t => t.id === activeDispatchTripId);
+          return (
+            <IntelligentDispatchModal
+              tripId={activeDispatchTripId}
+              tripSource={trip?.source || 'Source'}
+              tripDestination={trip?.destination || 'Destination'}
+              token={token}
+              apiFetch={apiFetch}
+              onClose={() => setActiveDispatchTripId(null)}
+              onDispatchSuccess={(assignedDriverName) => {
+                showSuccess(`Dispatched trip to ${assignedDriverName} successfully!`);
+                loadData();
+              }}
+            />
+          );
+        })()}
+
+        {activePodTripId !== null && (() => {
+          const trip = trips.find(t => t.id === activePodTripId);
+          return (
+            <ProofOfDeliveryModal
+              trip={trip}
+              isOpen={true}
+              onClose={() => setActivePodTripId(null)}
+              onSubmitSuccess={() => {
+                setActivePodTripId(null);
+                loadData();
+              }}
+              apiFetch={apiFetch}
+              showSuccess={showSuccess}
+              showError={showError}
+            />
+          );
+        })()}
+
+        {activeInvoiceTripId !== null && (
+          <TripInvoiceViewer
+            tripId={activeInvoiceTripId}
+            apiFetch={apiFetch}
+            onClose={() => setActiveInvoiceTripId(null)}
+          />
+        )}
 
         {/* MODAL: CREATE TRIP */}
         {showCreateTrip && (
@@ -5917,6 +6225,32 @@ export default function App() {
                 </select>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }} className="form-group">
+                <div>
+                  <label className="form-label">Vehicle Type Spec</label>
+                  <select
+                    className="form-select"
+                    value={editDriverVehicleType}
+                    onChange={e => setEditDriverVehicleType(e.target.value)}
+                  >
+                    <option value="mini_van">🚐 Mini Van</option>
+                    <option value="cargo_truck">🚚 Cargo Truck</option>
+                    <option value="heavy_hauler">🚛 Heavy Hauler</option>
+                    <option value="container_trailer">📦 Container Trailer</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Odometer Reading (km)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={editDriverOdometerKm}
+                    onChange={e => setEditDriverOdometerKm(e.target.value)}
+                    min="0"
+                  />
+                </div>
+              </div>
+
               <div className="form-group">
                 <label className="form-label">Availability Status</label>
                 <select
@@ -6122,41 +6456,110 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px', marginBottom: '16px' }}>
-                <input
-                  type="checkbox"
-                  id="enable_login"
-                  checked={newDriverData.enable_login}
-                  onChange={e => {
-                    const checked = e.target.checked;
-                    let autoUser = newDriverData.username;
-                    let autoPass = newDriverData.password;
-                    if (checked && !autoUser) {
-                      const baseUser = newDriverData.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-                      autoUser = baseUser ? `${baseUser}_driver` : 'driver_' + Math.floor(1000 + Math.random() * 9000);
-                      autoPass = 'Driver@' + Math.floor(100000 + Math.random() * 900000);
-                    }
-                    setNewDriverData({
-                      ...newDriverData,
-                      enable_login: checked,
-                      username: autoUser,
-                      password: autoPass
-                    });
-                  }}
-                />
-                <label htmlFor="enable_login" className="form-label" style={{ margin: 0, cursor: 'pointer' }}>
-                  Enable Driver Login Account
-                </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">Initial Availability Status</label>
+                  <select
+                    className="form-select"
+                    value={newDriverData.status}
+                    onChange={e => setNewDriverData({ ...newDriverData, status: e.target.value })}
+                  >
+                    <option value="available">Available (Idle)</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Vehicle Type Spec</label>
+                  <select
+                    className="form-select"
+                    value={newDriverData.vehicle_type}
+                    onChange={e => setNewDriverData({ ...newDriverData, vehicle_type: e.target.value })}
+                  >
+                    <option value="mini_van">🚐 Mini Van</option>
+                    <option value="cargo_truck">🚚 Cargo Truck</option>
+                    <option value="heavy_hauler">🚛 Heavy Hauler</option>
+                    <option value="container_trailer">📦 Container Trailer</option>
+                  </select>
+                </div>
               </div>
 
-              {newDriverData.enable_login && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">Initial Odometer (km)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={newDriverData.odometer_km}
+                    onChange={e => setNewDriverData({ ...newDriverData, odometer_km: e.target.value })}
+                    min="0"
+                    placeholder="e.g. 0"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Status Change Note (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={newDriverData.note}
+                    onChange={e => setNewDriverData({ ...newDriverData, note: e.target.value })}
+                    placeholder="Reason/profile creation note"
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Login Account Setup</label>
+                <div style={{ display: 'flex', gap: '16px', marginTop: '6px', marginBottom: '10px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="account_mode"
+                      checked={newDriverData.account_mode === 'auto'}
+                      onChange={() => setNewDriverData({ ...newDriverData, account_mode: 'auto' })}
+                    />
+                    Auto-generate
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="account_mode"
+                      checked={newDriverData.account_mode === 'custom'}
+                      onChange={() => {
+                        const baseUser = newDriverData.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+                        const autoUser = baseUser ? `${baseUser}_driver` : 'driver_' + Math.floor(1000 + Math.random() * 9000);
+                        const autoPass = 'Driver@' + Math.floor(100000 + Math.random() * 900000);
+                        setNewDriverData({
+                          ...newDriverData,
+                          account_mode: 'custom',
+                          username: autoUser,
+                          password: autoPass
+                        });
+                      }}
+                    />
+                    Specify custom
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#fff', fontSize: '13px', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="account_mode"
+                      checked={newDriverData.account_mode === 'existing'}
+                      onChange={() => setNewDriverData({ ...newDriverData, account_mode: 'existing' })}
+                    />
+                    Link existing User ID
+                  </label>
+                </div>
+              </div>
+
+              {newDriverData.account_mode === 'custom' && (
                 <div style={{ padding: '16px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-dim)', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label">Username *</label>
                     <input
                       type="text"
                       className="form-input"
-                      required={newDriverData.enable_login}
+                      required
                       value={newDriverData.username}
                       onChange={e => setNewDriverData({ ...newDriverData, username: e.target.value })}
                       placeholder="Username for login"
@@ -6169,7 +6572,7 @@ export default function App() {
                       <input
                         type="text"
                         className="form-input"
-                        required={newDriverData.enable_login}
+                        required
                         value={newDriverData.password}
                         onChange={e => setNewDriverData({ ...newDriverData, password: e.target.value })}
                         placeholder="Password"
@@ -6197,6 +6600,23 @@ export default function App() {
                       onChange={e => setNewDriverData({ ...newDriverData, email: e.target.value })}
                       placeholder="driver@example.com"
                     />
+                  </div>
+                </div>
+              )}
+
+              {newDriverData.account_mode === 'existing' && (
+                <div style={{ padding: '16px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid var(--border-dim)', marginBottom: '20px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label">Existing User ID *</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      required
+                      value={newDriverData.user_id}
+                      onChange={e => setNewDriverData({ ...newDriverData, user_id: e.target.value })}
+                      placeholder="e.g. 5"
+                    />
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px', display: 'block' }}>The user must have the 'driver' role and not be linked to any other driver profile.</span>
                   </div>
                 </div>
               )}
@@ -6802,6 +7222,18 @@ export default function App() {
               </button>
             </div>
 
+            <div style={{ backgroundColor: 'rgba(59, 130, 246, 0.08)', border: '1px dashed rgba(59, 130, 246, 0.4)', borderRadius: '8px', padding: '12px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '12.5px', color: 'var(--accent-cyan)' }}>Scan RC / Insurance Paper</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Auto-fill plate, make, VIN & dates via PaddleOCR</div>
+              </div>
+              <label className="btn btn-sm btn-primary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', padding: '6px 12px' }}>
+                <Camera size={13} />
+                {ocrLoading ? 'Scanning...' : 'Scan RC Photo'}
+                <input type="file" accept="image/*" onChange={handleVehicleDocumentOCRUpload} style={{ display: 'none' }} disabled={ocrLoading} />
+              </label>
+            </div>
+
             <div className="form-group">
               <label className="form-label">Make *</label>
               <input
@@ -6848,6 +7280,52 @@ export default function App() {
                   value={newVehicleData.license_plate}
                   onChange={e => setNewVehicleData({ ...newVehicleData, license_plate: e.target.value.toUpperCase() })}
                   placeholder="e.g. MH-12-PQ-1234"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div className="form-group">
+                <label className="form-label">Chassis No. (VIN)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={newVehicleData.chassis_number}
+                  onChange={e => setNewVehicleData({ ...newVehicleData, chassis_number: e.target.value.toUpperCase() })}
+                  placeholder="17-character VIN"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Engine No.</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={newVehicleData.engine_number}
+                  onChange={e => setNewVehicleData({ ...newVehicleData, engine_number: e.target.value.toUpperCase() })}
+                  placeholder="Engine serial number"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div className="form-group">
+                <label className="form-label">Insurance Expiry</label>
+                <input
+                  type="date"
+                  className="form-input"
+                  value={newVehicleData.insurance_expiry_date ? newVehicleData.insurance_expiry_date.split('T')[0] : ''}
+                  onChange={e => setNewVehicleData({ ...newVehicleData, insurance_expiry_date: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Fitness Expiry</label>
+                <input
+                  type="date"
+                  className="form-input"
+                  value={newVehicleData.fitness_expiry_date ? newVehicleData.fitness_expiry_date.split('T')[0] : ''}
+                  onChange={e => setNewVehicleData({ ...newVehicleData, fitness_expiry_date: e.target.value })}
                 />
               </div>
             </div>
@@ -7145,6 +7623,18 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* Proof of Delivery Modal */}
+      <ProofOfDeliveryModal
+        trip={selectedPodTrip}
+        isOpen={!!selectedPodTrip}
+        onClose={() => setSelectedPodTrip(null)}
+        onSubmitSuccess={() => {
+          loadData();
+        }}
+        apiFetch={apiFetch}
+        showSuccess={showSuccess}
+        showError={showError}
+      />
     </>
   );
 }

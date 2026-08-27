@@ -5,8 +5,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
 from app.api.deps import get_current_user, get_db
 from app.models.driver import Driver
 from app.models.fuel import FuelLog
@@ -17,6 +15,8 @@ from app.schemas.fuel_theft import (
     FuelTheftAlertResponse,
     FuelTheftAnalyticsResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/fuel/theft", tags=["fuel-theft-detection"])
 
@@ -130,6 +130,22 @@ def evaluate_fuel_log_for_theft(
                 alerts_created.append(alert)
 
     db.commit()
+
+    if alerts_created:
+        from app.models.notification import Notification
+
+        for alert in alerts_created:
+            notif = Notification(
+                title="🚨 Potential Fuel Theft Alert",
+                message=alert.description,
+                severity=alert.severity,
+                category="fuel_theft",
+                link_id=str(alert.id),
+                is_read=False,
+            )
+            db.add(notif)
+        db.commit()
+
     return alerts_created
 
 

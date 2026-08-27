@@ -1,7 +1,6 @@
 import logging
-from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -45,8 +44,7 @@ def get_finance_dashboard_summary(
     )
 
     overall_fuel = (
-        db.query(func.sum(FuelLog.cost)).filter(FuelLog.is_personal == False).scalar()
-        or 0.0
+        db.query(func.sum(FuelLog.cost)).filter(~FuelLog.is_personal).scalar() or 0.0
     )
 
     overall_tolls = (
@@ -103,7 +101,7 @@ def get_finance_dashboard_summary(
 
         t_fuel = (
             db.query(func.sum(FuelLog.cost))
-            .filter(FuelLog.trip_id == t.id, FuelLog.is_personal == False)
+            .filter(FuelLog.trip_id == t.id, ~FuelLog.is_personal)
             .scalar()
             or 0.0
         )
@@ -172,7 +170,7 @@ def get_finance_dashboard_summary(
         if v_trip_ids:
             v_fuel += (
                 db.query(func.sum(FuelLog.cost))
-                .filter(FuelLog.trip_id.in_(v_trip_ids), FuelLog.is_personal == False)
+                .filter(FuelLog.trip_id.in_(v_trip_ids), ~FuelLog.is_personal)
                 .scalar()
                 or 0.0
             )
@@ -184,7 +182,7 @@ def get_finance_dashboard_summary(
                 .filter(
                     FuelLog.driver_id == v.assigned_driver.id,
                     FuelLog.trip_id.is_(None),
-                    FuelLog.is_personal == False,
+                    ~FuelLog.is_personal,
                 )
                 .scalar()
                 or 0.0
@@ -264,7 +262,7 @@ def get_finance_dashboard_summary(
 
         d_fuel = (
             db.query(func.sum(FuelLog.cost))
-            .filter(FuelLog.driver_id == d.id, FuelLog.is_personal == False)
+            .filter(FuelLog.driver_id == d.id, ~FuelLog.is_personal)
             .scalar()
             or 0.0
         )

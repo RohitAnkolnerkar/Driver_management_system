@@ -17,7 +17,16 @@ class Vehicle(Base):
     status = Column(
         String, default="active", nullable=False
     )  # active, maintenance, inactive
+    vehicle_type = Column(
+        String, default="cargo_truck", nullable=False
+    )  # cargo_truck, light_van, semi_trailer, electric_truck
     fasttag_balance = Column(Float, default=1000.0, nullable=False)
+    chassis_number = Column(String, nullable=True)
+    engine_number = Column(String, nullable=True)
+    registration_date = Column(DateTime, nullable=True)
+    insurance_expiry_date = Column(DateTime, nullable=True)
+    fitness_expiry_date = Column(DateTime, nullable=True)
+    puc_expiry_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=get_now_ist_naive, nullable=False)
 
     assigned_driver = relationship(

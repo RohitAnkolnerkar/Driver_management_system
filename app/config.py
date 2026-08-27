@@ -60,6 +60,12 @@ class Settings:
         os.getenv("MANDATORY_SAFETY_INSPECTION", "true").lower() == "true"
     )
 
+    SMTP_HOST: str | None = os.getenv("SMTP_HOST")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str | None = os.getenv("SMTP_USER")
+    SMTP_PASSWORD: str | None = os.getenv("SMTP_PASSWORD")
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "noreply@fleetflow.com")
+
     @property
     def cors_origins(self) -> List[str]:
         raw_value = os.getenv("CORS_ORIGINS", "*")

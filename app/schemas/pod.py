@@ -1,25 +1,31 @@
+from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
-class ProofOfDeliveryCreate(BaseModel):
-    recipient_name: str = Field(..., min_length=2)
-    recipient_signature: Optional[str] = Field(
-        default=None, description="Base64 signature representation"
-    )
+class PODCreate(BaseModel):
+    recipient_name: str
+    recipient_phone: Optional[str] = None
+    signature_data: str  # Base64 PNG signature string
+    delivery_photo_url: Optional[str] = None
     delivery_notes: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
 
-class ProofOfDeliveryResponse(BaseModel):
+class PODResponse(BaseModel):
     id: int
     trip_id: int
+    driver_id: int
     recipient_name: str
-    recipient_signature: Optional[str] = None
+    recipient_phone: Optional[str] = None
+    signature_data: str
+    delivery_photo_url: Optional[str] = None
     delivery_notes: Optional[str] = None
-    delivered_at: str
-    geofence_verified: bool
+    delivered_at: datetime
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    verification_status: str
 
     model_config = ConfigDict(from_attributes=True)

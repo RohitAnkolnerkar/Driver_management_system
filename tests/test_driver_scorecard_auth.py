@@ -1,5 +1,3 @@
-import pytest
-
 from app.core.time_utils import get_now_ist_naive
 from app.models.driver import Driver
 from app.models.trip import Trip

@@ -63,7 +63,7 @@ def calculate_detention_metrics(trip: Trip) -> DetentionClockResponse:
     return DetentionClockResponse(
         trip_id=trip.id,
         detention_start_time=start_time.isoformat(),
-        detention_end_time=end_time.isoformat() if trip.detention_end_time else None,
+        detention_end_time=end_time.isoformat() if end_time is not None else None,
         elapsed_minutes=round(elapsed_min, 1),
         grace_minutes=grace_min,
         is_grace_exceeded=is_exceeded,

@@ -6,9 +6,8 @@ import sys
 # Add current directory to path
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-import app.models  # Registers all models
 from app.core.security import hash_password
-from app.db import Base, SessionLocal, engine
+from app.db import Base, SessionLocal
 from app.models.driver import Driver
 from app.models.fuel import FuelLog
 from app.models.fuel_theft import FuelTheftAlert

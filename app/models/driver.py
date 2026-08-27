@@ -20,10 +20,10 @@ class Driver(Base):
     name = Column(String, nullable=False)
     phone = Column(String, unique=True, nullable=False)
     status = Column(String, default="available")  # available, on_trip, inactive
-    license_number = Column(String)
+    license_number = Column(String, unique=True, nullable=True)
     license_expiry = Column(DateTime)
     created_at = Column(DateTime, default=get_now_ist_naive)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=True)
 
     current_latitude = Column(Float, nullable=True)
     current_longitude = Column(Float, nullable=True)
@@ -31,9 +31,28 @@ class Driver(Base):
 
     base_salary = Column(Float, default=0.0, nullable=False)
     commission_percentage = Column(Float, default=0.0, nullable=False)
-    vehicle_type = Column(String, default="cargo_truck", nullable=False)
-    odometer_km = Column(Float, default=0.0, nullable=False)
+    licensed_vehicle_class = Column(
+        String, default="HMV", nullable=False
+    )  # HMV, LMV, Transport
     vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=True)
+
+    @property
+    def odometer_km(self) -> float:
+        return self.vehicle.odometer_km if self.vehicle else 0.0
+
+    @odometer_km.setter
+    def odometer_km(self, value: float):
+        if self.vehicle:
+            self.vehicle.odometer_km = value
+
+    @property
+    def vehicle_type(self) -> str:
+        return self.vehicle.vehicle_type if self.vehicle else "cargo_truck"
+
+    @vehicle_type.setter
+    def vehicle_type(self, value: str):
+        if self.vehicle:
+            self.vehicle.vehicle_type = value
 
     user = relationship(
         "User",

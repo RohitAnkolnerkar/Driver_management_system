@@ -25,7 +25,7 @@ def create_user_helper(client, username, role, phone=None):
 def test_dispatcher_location_override_and_geofence_simulation(client, db_session):
     # 1. Register users
     t_disp = create_user_helper(client, "loc_disp", "dispatcher")
-    t_drv1 = create_user_helper(client, "loc_drv1", "driver", "9900001111")
+    create_user_helper(client, "loc_drv1", "driver", "9900001111")
     t_drv2 = create_user_helper(client, "loc_drv2", "driver", "9900002222")
 
     drv1 = db_session.query(Driver).filter(Driver.phone == "9900001111").first()

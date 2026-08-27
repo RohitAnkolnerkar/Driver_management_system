@@ -1,4 +1,3 @@
-import logging
 import re
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -39,8 +38,6 @@ from app.schemas.driver import (
     DriverUpdate,
 )
 from app.schemas.trip import TripResponse
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/drivers", tags=["Drivers"])
 
@@ -305,7 +302,6 @@ def update_any_driver_location(
     db.commit()
     db.refresh(driver)
 
-    # Trigger WebSocket real-time update broadcast
     from app.api.ws import broadcast_update
 
     broadcast_update(
@@ -321,7 +317,6 @@ def update_any_driver_location(
         }
     )
 
-    # Build response with arrival signal
     response_data = DriverLocationResponse.model_validate(driver)
     response_data.near_destination = near_destination
     response_data.active_trip_id = active_trip_id
@@ -340,66 +335,34 @@ def create_driver(
 
     user_id = driver.user_id
 
-    # If user_id is explicitly provided, validate it
-    if user_id:
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        if user.role != "driver":
-            raise HTTPException(
-                status_code=400,
-                detail="The linked user does not have the 'driver' role",
-            )
-    else:
-        # Determine username and email (use phone if not provided)
-        username = driver.username or driver.phone
-        email = driver.email or f"{username}@example.com"
-        password = driver.password or "driver_secret123"
-
-        # Check if user already exists
-        existing_user = (
-            db.query(User)
-            .filter((User.username == username) | (User.email == email))
-            .first()
-        )
+    if driver.username and driver.password:
+        existing_user = db.query(User).filter(User.username == driver.username).first()
         if existing_user:
-            # Check if this user is already linked to a driver profile
-            existing_driver_for_user = (
-                db.query(Driver).filter(Driver.user_id == existing_user.id).first()
+            raise HTTPException(
+                status_code=400, detail="Username is already registered"
             )
-            if existing_driver_for_user:
-                raise HTTPException(
-                    status_code=400, detail="Driver with this phone already exists"
-                )
 
-            if existing_user.role == "driver":
-                # Link existing driver-role user
-                user_id = existing_user.id
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"User with username '{username}' or email '{email}' already exists with role '{existing_user.role}'.",
-                )
-        else:
-            db_user = User(
-                username=username,
-                email=email,
-                hashed_password=hash_password(password),
-                role="driver",
-                is_active=True,
+        email = driver.email or f"{driver.username}@example.com"
+        existing_email = db.query(User).filter(User.email == email).first()
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Email is already registered")
+
+        db_user = User(
+            username=driver.username,
+            email=email,
+            hashed_password=hash_password(driver.password),
+            role="driver",
+            is_active=True,
+        )
+        db.add(db_user)
+        try:
+            db.flush()
+            user_id = db_user.id
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=400, detail="Username or email already registered"
             )
-            db.add(db_user)
-            try:
-                db.flush()
-                user_id = db_user.id
-            except IntegrityError as e:
-                db.rollback()
-                logger.warning(
-                    f"Failed to register user for driver creation - username or email already registered: {e}"
-                )
-                raise HTTPException(
-                    status_code=400, detail="Username or email already registered"
-                )
 
     existing_driver = None
     if user_id:
@@ -460,9 +423,6 @@ def create_driver(
         )
         db.commit()
         db.refresh(db_driver)
-
-        # Query linked user to return actual username/email
-        linked_user = db.query(User).filter(User.id == db_driver.user_id).first()
         return {
             "id": db_driver.id,
             "name": db_driver.name,
@@ -477,24 +437,20 @@ def create_driver(
             "vehicle_type": db_driver.vehicle_type,
             "odometer_km": db_driver.odometer_km,
             "vehicle_id": db_driver.vehicle_id,
-            "username": linked_user.username if linked_user else None,
+            "username": (
+                driver.username if (driver.username and driver.password) else None
+            ),
             "password": (
-                driver.password
-                if driver.password
-                else ("driver_secret123" if not driver.user_id else None)
+                driver.password if (driver.username and driver.password) else None
             ),
         }
     except IntegrityError as e:
         db.rollback()
         err = str(e.orig).lower() if getattr(e, "orig", None) else str(e).lower()
         if "duplicate" in err or "unique" in err or "already exists" in err:
-            logger.warning(
-                f"Driver creation failed - driver with this phone already exists: {err}"
-            )
             raise HTTPException(
                 status_code=400, detail="Driver with this phone already exists"
             )
-        logger.error(f"Driver creation failed with database integrity error: {err}")
         raise HTTPException(status_code=400, detail="Database integrity error")
 
 
@@ -1218,9 +1174,8 @@ def generate_driver_payment(
         db.commit()
         db.refresh(db_payment)
         return db_payment
-    except IntegrityError as e:
+    except IntegrityError:
         db.rollback()
-        logger.error(f"Database integrity error during payment generation: {e}")
         raise HTTPException(
             status_code=400, detail="Database integrity error during payment generation"
         )
@@ -1272,9 +1227,8 @@ def update_driver_payment(
         db.commit()
         db.refresh(payment)
         return payment
-    except IntegrityError as e:
+    except IntegrityError:
         db.rollback()
-        logger.error(f"Database integrity error during payment update: {e}")
         raise HTTPException(
             status_code=400, detail="Database integrity error during payment update"
         )
@@ -1490,78 +1444,6 @@ def update_driver(
     if "vehicle_id" in driver_update.model_fields_set:
         driver.vehicle_id = driver_update.vehicle_id
 
-    # Handle credential updates for the driver's User account
-    if (
-        driver_update.username is not None
-        or driver_update.password is not None
-        or driver_update.email is not None
-    ):
-        from app.core.security import hash_password
-        from app.models.user import User
-
-        if driver.user:
-            if driver_update.username is not None:
-                existing_user = (
-                    db.query(User)
-                    .filter(
-                        User.username == driver_update.username,
-                        User.id != driver.user_id,
-                    )
-                    .first()
-                )
-                if existing_user:
-                    raise HTTPException(
-                        status_code=400, detail="Username is already registered"
-                    )
-                driver.user.username = driver_update.username
-
-            if driver_update.email is not None:
-                existing_email = (
-                    db.query(User)
-                    .filter(
-                        User.email == driver_update.email, User.id != driver.user_id
-                    )
-                    .first()
-                )
-                if existing_email:
-                    raise HTTPException(
-                        status_code=400, detail="Email is already registered"
-                    )
-                driver.user.email = driver_update.email
-
-            if driver_update.password is not None:
-                driver.user.hashed_password = hash_password(driver_update.password)
-        else:
-            # Create a user account on the fly if it didn't exist (legacy driver)
-            username = driver_update.username or driver.phone
-            email = driver_update.email or f"{username}@example.com"
-            password = driver_update.password or "driver_secret123"
-
-            existing_user = (
-                db.query(User)
-                .filter((User.username == username) | (User.email == email))
-                .first()
-            )
-            if existing_user:
-                if existing_user.role == "driver":
-                    driver.user_id = existing_user.id
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"User with username '{username}' or email '{email}' already exists with role '{existing_user.role}'.",
-                    )
-            else:
-                db_user = User(
-                    username=username,
-                    email=email,
-                    hashed_password=hash_password(password),
-                    role="driver",
-                    is_active=True,
-                )
-                db.add(db_user)
-                db.flush()
-                driver.user_id = db_user.id
-
     try:
         db.commit()
         db.refresh(driver)
@@ -1570,13 +1452,9 @@ def update_driver(
         db.rollback()
         err = str(e.orig).lower() if getattr(e, "orig", None) else str(e).lower()
         if "duplicate" in err or "unique" in err or "already exists" in err:
-            logger.warning(
-                f"Driver update failed - driver with this phone already exists: {err}"
-            )
             raise HTTPException(
                 status_code=400, detail="Driver with this phone already exists"
             )
-        logger.error(f"Driver update failed with database integrity error: {err}")
         raise HTTPException(status_code=400, detail="Database integrity error")
 
 
@@ -2093,3 +1971,43 @@ def get_driver_payslip(
         "total_deductions": total_deductions,
         "net_salary": net_salary,
     }
+
+
+def evaluate_trip_geofences(
+    driver: Driver, lat: float, lng: float, db: Session
+) -> List[str]:
+    import math
+
+    events: List[str] = []
+    assigned_trip = (
+        db.query(Trip)
+        .filter(Trip.driver_id == driver.id, Trip.status == "assigned")
+        .first()
+    )
+    if (
+        assigned_trip
+        and assigned_trip.source_latitude is not None
+        and assigned_trip.source_longitude is not None
+    ):
+        lat1 = math.radians(lat)
+        lon1 = math.radians(lng)
+        lat2 = math.radians(assigned_trip.source_latitude)
+        lon2 = math.radians(assigned_trip.source_longitude)
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        )
+        dist = 6371.0 * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+        if dist <= 0.2 and assigned_trip.arrived_at_source_time is None:
+            assigned_trip.arrived_at_source_time = get_now_ist_naive()
+            events.append(f"Arrived at source geofence for Trip #{assigned_trip.id}")
+            db.add(
+                TripHistory(
+                    trip_id=assigned_trip.id,
+                    status=assigned_trip.status,
+                    note="arrived at source geofence",
+                )
+            )
+    return events

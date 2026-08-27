@@ -92,8 +92,12 @@ def calculate_pricing_quote(
         distance = round(max(5.0, straight_dist * 1.25), 1)
         auto_geocoded = True
 
-    base_tariff = tariff["base_tariff"]
-    distance_charge = round(distance * tariff["rate_per_km"], 2)
+    base_tariff: float = float(tariff["base_tariff"])
+    rate_per_km: float = float(tariff["rate_per_km"])
+    max_payload: float = float(tariff.get("max_payload_kg", 3500.0))
+    consumption_per_km: float = float(tariff["consumption_per_km"])
+
+    distance_charge = round(distance * rate_per_km, 2)
 
     # 1. Distance-Scaled Ton-KM Cargo Weight Surcharge
     # Free payload allowance: 500 kg. Excess weight incurs ₹1.50 per ton-km.
@@ -103,7 +107,6 @@ def calculate_pricing_quote(
         weight_surcharge = round(excess_tons * distance * 1.50, 2)
 
     # 2. Over-capacity Payload Penalty
-    max_payload = tariff.get("max_payload_kg", 3500.0)
     is_overweight = req.cargo_weight_kg > max_payload
     if is_overweight:
         # Additional 20% surcharge for exceeding recommended vehicle payload
@@ -112,23 +115,22 @@ def calculate_pricing_quote(
         )
 
     # 3. Fuel Indexing Adjustment with Payload Load Factor
-    national_avg = FALLBACK_DIESEL_RATES.get("national_average", 97.83)
-    cities = FALLBACK_DIESEL_RATES.get("cities", {})
-    local_diesel_price = national_avg
+    national_avg: float = float(FALLBACK_DIESEL_RATES.get("national_average", 97.83))
+    cities: dict = FALLBACK_DIESEL_RATES.get("cities", {})  # type: ignore[assignment]
+    local_diesel_price: float = national_avg
 
     if req.source or req.destination:
         for city_name, price in cities.items():
-            if (
-                city_name.lower() in req.source.lower()
-                or city_name.lower() in req.destination.lower()
+            if (req.source and city_name.lower() in req.source.lower()) or (
+                req.destination and city_name.lower() in req.destination.lower()
             ):
-                local_diesel_price = max(local_diesel_price, price)
+                local_diesel_price = max(local_diesel_price, float(price))
 
     # Heavy weight increases engine strain & diesel fuel burn rate by up to 15%
     load_ratio = min(1.5, req.cargo_weight_kg / max_payload) if max_payload > 0 else 1.0
     fuel_load_multiplier = 1.0 + (load_ratio * 0.15)
 
-    expected_liters = distance * tariff["consumption_per_km"] * fuel_load_multiplier
+    expected_liters = distance * consumption_per_km * fuel_load_multiplier
     baseline_fuel_cost = expected_liters * national_avg
     actual_fuel_cost = expected_liters * local_diesel_price
     fuel_index_adjustment = round(max(0.0, actual_fuel_cost - baseline_fuel_cost), 2)

@@ -680,7 +680,7 @@ export const ExpenseReimbursementCard: React.FC<ExpenseReimbursementCardProps> =
                   </div>
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Base Trip Earnings / Fares:</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>Base Trip Revenue / Fares:</span>
                     <strong style={{ color: '#fff' }}>₹{settlementData.base_trip_earnings.toFixed(2)}</strong>
                   </div>
 

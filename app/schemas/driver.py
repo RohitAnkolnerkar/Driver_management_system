@@ -23,6 +23,7 @@ class DriverCreate(BaseModel):
     email: Optional[str] = None
     base_salary: Optional[float] = 0.0
     commission_percentage: Optional[float] = 0.0
+    licensed_vehicle_class: Optional[str] = "HMV"
     vehicle_type: Optional[str] = "cargo_truck"
     odometer_km: Optional[float] = 0.0
     vehicle_id: Optional[int] = None
@@ -42,6 +43,7 @@ class DriverUpdate(BaseModel):
     note: Optional[str] = None
     base_salary: Optional[float] = None
     commission_percentage: Optional[float] = None
+    licensed_vehicle_class: Optional[str] = None
     vehicle_type: Optional[str] = None
     odometer_km: Optional[float] = None
     vehicle_id: Optional[int] = None
@@ -69,7 +71,7 @@ class DriverResponse(BaseModel):
     last_location_update: Optional[datetime] = None
     base_salary: float = 0.0
     commission_percentage: float = 0.0
-    vehicle_type: Optional[str] = "cargo_truck"
+    licensed_vehicle_class: Optional[str] = "HMV"
     odometer_km: Optional[float] = 0.0
     vehicle_id: Optional[int] = None
     active_hours_last_24h: float = 0.0
@@ -87,7 +89,6 @@ class DriverLocationResponse(DriverResponse):
 
 class DriverCreateResponse(DriverResponse):
     username: Optional[str] = None
-    password: Optional[str] = None
 
 
 class DriverSummaryResponse(BaseModel):

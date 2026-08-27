@@ -56,6 +56,29 @@ export const TripInvoiceViewer: React.FC<TripInvoiceViewerProps> = ({
     }
   };
 
+  const handleDownloadPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/trips/${tripId}/invoice/pdf`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!response.ok) throw new Error("Failed to download PDF invoice");
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice_trip_${tripId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   return (
     <div className="modal-overlay" style={{ zIndex: 1100 }}>
       <div className="modal-content" style={{ maxWidth: '640px', width: '90%', padding: '28px' }}>
@@ -136,7 +159,10 @@ export const TripInvoiceViewer: React.FC<TripInvoiceViewerProps> = ({
               <button type="button" className="btn btn-secondary" onClick={() => window.print()} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Printer size={15} /> Print Tax Invoice
               </button>
-              <button type="button" className="btn btn-primary" onClick={onClose}>
+              <button type="button" className="btn btn-primary" onClick={handleDownloadPDF} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FileText size={15} /> Download PDF
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={onClose}>
                 Close
               </button>
             </div>

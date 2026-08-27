@@ -1,9 +1,10 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.core.pdf import generate_invoice_pdf
 from app.models.trip import Trip
 from app.models.user import User
 from app.schemas.invoice import InvoiceLineItem, TripInvoiceResponse
@@ -101,4 +102,40 @@ def get_trip_invoice(
         tax_amount=tax_amount,
         total_amount=total_amount,
         payment_status="paid" if trip.status == "completed" else "pending",
+    )
+
+
+@router.get("/{trip_id}/invoice/pdf")
+def get_trip_invoice_pdf(
+    trip_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    inv_response = get_trip_invoice(trip_id, db, current_user)
+    inv_data = inv_response.model_dump()
+    from app.models.pod import ProofOfDelivery
+
+    pod = db.query(ProofOfDelivery).filter(ProofOfDelivery.trip_id == trip_id).first()
+    if pod:
+        inv_data["pod"] = {
+            "recipient_name": pod.recipient_name,
+            "recipient_phone": pod.recipient_phone,
+            "signature_data": pod.signature_data,
+            "delivered_at": (
+                pod.delivered_at.strftime("%d/%m/%Y %H:%M:%S")
+                if pod.delivered_at
+                else "N/A"
+            ),
+            "verification_status": pod.verification_status,
+        }
+
+    pdf_buffer = generate_invoice_pdf(inv_data)
+    pdf_bytes = pdf_buffer.getvalue() if hasattr(pdf_buffer, "getvalue") else pdf_buffer
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=invoice-trip-{trip_id}.pdf"
+        },
     )

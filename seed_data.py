@@ -8,16 +8,14 @@
 - Driver Expenses & Allowance Claims
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.core.time_utils import get_now_ist_naive
 from app.db import SessionLocal
 from app.models.driver import Driver
 from app.models.expense import TripExpense
 from app.models.fuel import FuelLog
-from app.models.fuel_theft import FuelTheftAlert
-from app.models.inspection import PreTripInspection
-from app.models.trip import ProofOfDelivery, Trip
+from app.models.trip import Trip
 from app.models.vehicle import MaintenanceLog, Vehicle
 
 
@@ -566,9 +564,7 @@ def seed_database():
                 "highway_name": "Mumbai-Pune Expressway",
                 "amount": 320.0,
                 "payment_method": "FASTag",
-                "transaction_reference": (
-                    sa_ref if "sa_ref" in locals() else "FT-5511882"
-                ),
+                "transaction_reference": "FT-5511882",
             },
             {
                 "vehicle_id": created_vehicles[0].id,
@@ -622,9 +618,6 @@ def seed_database():
             },
         ]
         for tlog in toll_logs_data:
-            # Correct any references
-            if tlog["transaction_reference"] == "FT-5511882" and "sa_ref" in locals():
-                tlog["transaction_reference"] = sa_ref
             tl = VehicleTollLog(**tlog)
             db.add(tl)
         db.commit()
