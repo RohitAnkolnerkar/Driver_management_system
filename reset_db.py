@@ -6,14 +6,14 @@ import sys
 # Add current directory to path
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from app.core.security import hash_password
-from app.db import Base, SessionLocal
-from app.models.driver import Driver
-from app.models.fuel import FuelLog
-from app.models.fuel_theft import FuelTheftAlert
-from app.models.user import User
-from app.models.vehicle import Vehicle
-from seed_data import seed_database
+from app.core.security import hash_password  # noqa: E402
+from app.db import Base, SessionLocal  # noqa: E402
+from app.models.driver import Driver  # noqa: E402
+from app.models.fuel import FuelLog  # noqa: E402
+from app.models.fuel_theft import FuelTheftAlert  # noqa: E402
+from app.models.user import User  # noqa: E402
+from app.models.vehicle import Vehicle  # noqa: E402
+from seed_data import seed_database  # noqa: E402
 
 
 def clear_and_seed_data():
@@ -88,7 +88,7 @@ def clear_and_seed_data():
                 severity="critical",
                 detected_loss_liters=25.5,
                 estimated_financial_loss=2422.5,
-                description=f"Abnormal consumption spike. Vehicle efficiency dropped to 2.1 km/L (expected 4.0 km/L). Estimated loss: 25.5 L.",
+                description="Abnormal consumption spike. Vehicle efficiency dropped to 2.1 km/L (expected 4.0 km/L). Estimated loss: 25.5 L.",
                 status="unresolved",
             )
             db.add(alert1)
@@ -106,7 +106,7 @@ def clear_and_seed_data():
                 severity="high",
                 detected_loss_liters=42.0,
                 estimated_financial_loss=3990.0,
-                description=f"Offsite refuel location mismatch. Card swiped at Shell Highway JNPT but vehicle GPS coordinates placed it 3.4 km away.",
+                description="Offsite refuel location mismatch. Card swiped at Shell Highway JNPT but vehicle GPS coordinates placed it 3.4 km away.",
                 status="unresolved",
             )
             db.add(alert2)
