@@ -119,9 +119,11 @@ def legacy_dashboard():
 
 @app.get("/health")
 def health_check():
+    """Health check endpoint for system probes and CI/CD pipeline verification."""
     return {"status": "ok", "service": settings.APP_NAME}
 
 
 @app.get("/ready")
 def readiness_check():
+    """Readiness probe endpoint for container orchestration checks."""
     return {"status": "ready", "service": settings.APP_NAME}
