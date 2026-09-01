@@ -18,10 +18,11 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
 ):
+    """Authenticate user credentials and return a OAuth2 JWT access token."""
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user:
         logger.warning(
-            f"Failed login attempt: username '{form_data.username}' not found"
+            f"Failed login attempt for username '{form_data.username}' not found"
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
