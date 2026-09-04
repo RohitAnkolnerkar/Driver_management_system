@@ -31,9 +31,14 @@ The **Driver & Fleet Management System** is an enterprise-grade platform designe
 - **Charts**: Recharts (`recharts`)
 - **Payments**: Razorpay integration (`app/api/payments_razorpay.py`)
 
-#### Frontend (Dual Stack Supported)
-1. **Original Vite App (`frontend/`)**: React 18 + TypeScript + Vite.
-2. **Next.js App Router App (`frontend-next/`)**: Next.js 14+ with App Router, TypeScript, Tailwind CSS, Glassmorphism design system, Lucide icons, Leaflet dark maps, and Recharts.
+#### Frontend
+- **Framework**: Next.js 14+ with App Router (`frontend-next/`)
+- **Language**: TypeScript 5
+- **Styling**: Tailwind CSS with Glassmorphism Dark Theme
+- **Icons**: `lucide-react`
+- **Mapping**: Leaflet & React-Leaflet (Dark Mode map rendering, real-time GPS tracking)
+- **Charts**: Recharts (`recharts`)
+- **Payments**: Razorpay integration
 
 ---
 
@@ -43,8 +48,7 @@ The **Driver & Fleet Management System** is an enterprise-grade platform designe
 Driver_dashboard/
 ├── alembic/                    # Database migration scripts
 ├── app/                        # Backend FastAPI Application
-├── frontend/                   # Original Vite React + TypeScript App (Preserved)
-├── frontend-next/              # Enterprise Next.js App Router Application
+├── frontend-next/              # Enterprise Next.js App Router Application (Primary Frontend)
 │   ├── src/
 │   │   ├── app/                # Next.js App Router Pages & Layouts
 │   │   │   ├── layout.tsx      # Root Layout with Glassmorphism Shell

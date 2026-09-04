@@ -1,0 +1,36 @@
+aws_region   = "us-east-1"
+environment  = "production"
+project_name = "fleetflow"
+
+vpc_cidr = "10.0.0.0/16"
+
+availability_zones       = ["us-east-1a", "us-east-1b"]
+public_subnet_cidrs      = ["10.0.1.0/24", "10.0.2.0/24"]
+private_app_subnet_cidrs = ["10.0.10.0/24", "10.0.11.0/24"]
+private_db_subnet_cidrs  = ["10.0.20.0/24", "10.0.21.0/24"]
+
+ecr_repository_name = "driverdashboard"
+
+db_name           = "driverdatabase1"
+db_master_username = "dbadmin"
+db_engine_version = "15.19"
+db_instance_class = "db.t3.micro"
+
+ecs_cluster_name   = "fleetflow-cluster"
+ecs_service_name   = "fleetflow-service"
+task_family        = "fleetflow-task"
+container_name     = "fleetflow"
+container_port     = 8000
+ecs_cpu            = 512
+ecs_memory         = 1024
+desired_task_count = 1
+
+min_task_count         = 1
+max_task_count         = 3
+autoscaling_cpu_target = 60
+
+log_retention_in_days = 30
+enable_container_insights = true
+
+github_repo   = "RohitAnkolnerkar/Driver_management_system"
+github_branch = "master"

@@ -86,4 +86,25 @@ dist/
 .env.development.local
 .env.test.local
 .env.production.local
+# Terraform
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/tf-test-plan
+**/terraform.tfvars
+**/crash.log
+**/crash.*.log
 
+# Environment / secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+**/__pycache__/
+**/*.pyc
+
+# Node
+**/node_modules/
+**/.next/
